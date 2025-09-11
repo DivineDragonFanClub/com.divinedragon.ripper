@@ -18,7 +18,7 @@ namespace DivineDragon
             return !string.IsNullOrEmpty(EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""));
         }
         
-        [MenuItem("Divine Dragon/Divine Ripper/Extract a bundle", false, 1000)]
+        [MenuItem("Divine Dragon/Divine Ripper/Extract a bundle", false, 1400)]
         public static void ExtractBundle()
         {
             string directory = "";
@@ -65,7 +65,7 @@ namespace DivineDragon
             }
         }
         
-        [MenuItem("Divine Dragon/Divine Ripper/Settings", false, 1001)]
+        [MenuItem("Divine Dragon/Divine Ripper/Settings", false, 1401)]
         public static void ShowDivineRipperSettings()
         {
             SettingsService.OpenProjectSettings("Project/Divine Dragon/Divine Ripper Settings");
