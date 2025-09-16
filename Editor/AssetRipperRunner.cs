@@ -86,34 +86,51 @@ namespace DivineDragon
             _apiClient = new HttpClient();
         }
         
-        public void SetDefaultUnityVersion()
+        public bool SetDefaultUnityVersion()
         {
             var response = _apiClient.PostAsync(APIUrl + "/Settings/Update", new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["DefaultVersion"] = Application.unityVersion,
             })).Result;
-            
+
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+
+            return response.IsSuccessStatusCode;
         }
 
-        public void AddFile(string path)
+        public bool AddFile(string path)
         {
             // TODO: Move to FormUrlEncodedContent
             var response = _apiClient.PostAsync(APIUrl + "/LoadFile", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
-            
+
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+
+            return response.IsSuccessStatusCode;
         }
 
-        public void ExportProject(string path)
+        public bool LoadFolder(string path)
+        {
+            var apiUrl = APIUrl;
+            var response = _apiClient.PostAsync(apiUrl + "/LoadFolder", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
+            Debug.Log("LoadFolder result: " + response.Content.ReadAsStringAsync().Result);
+
+            if (!response.IsSuccessStatusCode)
+                throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+
+            return response.IsSuccessStatusCode;
+        }
+
+        public bool ExportProject(string path)
         {
             // TODO: Move to FormUrlEncodedContent
             var response = _apiClient.PostAsync(APIUrl + "/Export/UnityProject", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
-            
+
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
-            
+
+            return response.IsSuccessStatusCode;
         }
         
         public void Dispose()
