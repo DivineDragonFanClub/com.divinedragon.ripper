@@ -3,6 +3,10 @@ using System.IO;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
+// Type aliases for clarity
+using Guid = System.String;
+using FilePath = System.String;
+
 namespace DivineDragon
 {
     /// Parses Unity .meta files to extract and update GUIDs
@@ -15,7 +19,7 @@ namespace DivineDragon
         private static readonly Regex GuidReplaceRegex = new Regex(@"^(guid:\s*)(['""]?)([a-f0-9]{32})(['""]?)\s*$", RegexOptions.Multiline);
 
         /// Extracts the GUID from a Unity .meta file
-        public static bool TryGetGuid(string metaFilePath, out string guid)
+        public static bool TryGetGuid(FilePath metaFilePath, out Guid guid)
         {
             guid = null;
 
@@ -49,7 +53,7 @@ namespace DivineDragon
         /// Updates the GUID in a Unity .meta file while preserving formatting
         /// NOTE: This method is currently unused but kept for potential future use cases
         /// where we might need to update GUIDs in meta files directly.
-        public static bool TryUpdateGuid(string metaFilePath, string newGuid)
+        public static bool TryUpdateGuid(FilePath metaFilePath, Guid newGuid)
         {
             try
             {
@@ -92,7 +96,7 @@ namespace DivineDragon
         }
 
         /// Just checking if ends in .meta for now, nothing too fancy
-        public static bool IsMetaFile(string filePath)
+        public static bool IsMetaFile(FilePath filePath)
         {
             return filePath.EndsWith(".meta");
         }

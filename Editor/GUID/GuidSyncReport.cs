@@ -4,6 +4,12 @@ using System.Linq;
 using System.Text;
 using UnityEngine;
 
+// Type aliases for clarity
+using Guid = System.String;
+using FilePath = System.String;
+using RelativePath = System.String;
+using AssetPath = System.String;
+
 namespace DivineDragon
 {
     /// Report is good for proving that the process works and for debugging
@@ -12,32 +18,32 @@ namespace DivineDragon
     [Serializable]
     public class GuidSyncReport
     {
-        public List<string> NewFilesImported { get; private set; }
+        public List<FilePath> NewFilesImported { get; private set; }
 
-        public List<string> SkippedFiles { get; private set; }
+        public List<FilePath> SkippedFiles { get; private set; }
 
         public List<GuidMapping> Mappings { get; private set; }
 
         [SerializeField]
         private List<FileDependencyMapping> _fileDependencyMappings;
 
-        private readonly Dictionary<string, GuidMapping> _byOldGuid = new Dictionary<string, GuidMapping>();
+        private readonly Dictionary<Guid, GuidMapping> _byOldGuid = new Dictionary<Guid, GuidMapping>();
 
         public string SummaryText { get; private set; }
 
         public GuidSyncReport()
         {
-            NewFilesImported = new List<string>();
-            SkippedFiles = new List<string>();
+            NewFilesImported = new List<FilePath>();
+            SkippedFiles = new List<FilePath>();
             Mappings = new List<GuidMapping>();
             _fileDependencyMappings = new List<FileDependencyMapping>();
         }
 
-        public Dictionary<string, List<DependencyUpdate>> FileDependencyUpdates
+        public Dictionary<FilePath, List<DependencyUpdate>> FileDependencyUpdates
         {
             get
             {
-                var dict = new Dictionary<string, List<DependencyUpdate>>();
+                var dict = new Dictionary<FilePath, List<DependencyUpdate>>();
                 if (_fileDependencyMappings != null)
                 {
                     foreach (var mapping in _fileDependencyMappings)
@@ -49,7 +55,7 @@ namespace DivineDragon
             }
         }
 
-        public void AddGuidMapping(string assetPath, string oldGuid, string newGuid)
+        public void AddGuidMapping(AssetPath assetPath, Guid oldGuid, Guid newGuid)
         {
             if (!_byOldGuid.TryGetValue(oldGuid, out var existing) || existing.NewGuid != newGuid)
             {
@@ -65,7 +71,7 @@ namespace DivineDragon
             }
         }
 
-        public void AddReferenceUpdate(string filePath, string guid)
+        public void AddReferenceUpdate(FilePath filePath, Guid guid)
         {
             _byOldGuid.TryGetValue(guid, out var mapping);
             if (mapping != null)
@@ -113,7 +119,7 @@ namespace DivineDragon
             return filePath;
         }
 
-        public void AddNewFile(string filePath)
+        public void AddNewFile(FilePath filePath)
         {
             if (!NewFilesImported.Contains(filePath))
             {
@@ -121,7 +127,7 @@ namespace DivineDragon
             }
         }
 
-        public void AddSkippedFile(string filePath)
+        public void AddSkippedFile(FilePath filePath)
         {
             if (!SkippedFiles.Contains(filePath))
             {
@@ -220,25 +226,25 @@ namespace DivineDragon
     [Serializable]
     public class GuidMapping
     {
-        public string OldGuid { get; set; }
-        public string NewGuid { get; set; }
+        public Guid OldGuid { get; set; }
+        public Guid NewGuid { get; set; }
         public string AssetName { get; set; }
-        public string AssetPath { get; set; }
+        public AssetPath AssetPath { get; set; }
     }
 
     [Serializable]
     public class DependencyUpdate
     {
         public string DependencyName { get; set; }
-        public string DependencyPath { get; set; }
-        public string OldGuid { get; set; }
-        public string NewGuid { get; set; }
+        public AssetPath DependencyPath { get; set; }
+        public Guid OldGuid { get; set; }
+        public Guid NewGuid { get; set; }
     }
 
     [Serializable]
     public class FileDependencyMapping
     {
-        public string FilePath { get; set; }
+        public FilePath FilePath { get; set; }
         public List<DependencyUpdate> Dependencies { get; set; }
     }
 }

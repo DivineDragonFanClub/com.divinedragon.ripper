@@ -6,15 +6,21 @@ using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
+// Type aliases for clarity
+using Guid = System.String;
+using FilePath = System.String;
+using RelativePath = System.String;
+using DirectoryPath = System.String;
+
 namespace DivineDragon
 {
     /// GUID "synchronization" that coordinates the remapping of GUIDs
     /// from subordinate project (imported assets) to main project (current Unity project)
     public class GuidSynchronizer
     {
-        private readonly string _mainProjectPath;
-        private readonly string _subordinateProjectPath;
-        private readonly Dictionary<string, GuidMapping> _guidMappings;
+        private readonly DirectoryPath _mainProjectPath;
+        private readonly DirectoryPath _subordinateProjectPath;
+        private readonly Dictionary<RelativePath, GuidMapping> _guidMappings;
 
         // Matches: guid: 0123456789abcdef0123456789abcdef
         // Captures the GUID (group 1)
@@ -28,22 +34,21 @@ namespace DivineDragon
 
         private class GuidMapping
         {
-            public string RelativePath { get; set; }
-            public string MainGuid { get; set; }
-            public string SubordinateGuid { get; set; }
+            public RelativePath RelativePath { get; set; }
+            public Guid MainGuid { get; set; }
+            public Guid SubordinateGuid { get; set; }
         }
 
-        public GuidSynchronizer(string mainProjectPath, string subordinateProjectPath)
+        public GuidSynchronizer(DirectoryPath mainProjectPath, DirectoryPath subordinateProjectPath)
         {
             _mainProjectPath = mainProjectPath;
             _subordinateProjectPath = subordinateProjectPath;
-            _guidMappings = new Dictionary<string, GuidMapping>();
+            _guidMappings = new Dictionary<RelativePath, GuidMapping>();
         }
 
         public GuidSyncReport Synchronize()
         {
             Debug.Log("Starting GUID synchronization...");
-            var report = new GuidSyncReport();
 
             try
             {
@@ -52,17 +57,18 @@ namespace DivineDragon
                 if (_guidMappings.Count == 0)
                 {
                     Debug.Log("No GUID differences found. Assets are already synchronized.");
-                    report.FinalizeReport();
-                    return report;
+                    var emptyReport = new GuidSyncReport();
+                    emptyReport.FinalizeReport();
+                    return emptyReport;
                 }
 
                 Debug.Log($"Found {_guidMappings.Count} GUID differences to synchronize");
 
-                if (_guidMappings.Count > 0)
-                {
-                    UpdateReferences(report);
-                }
+                // Do the actual work
+                var fileUpdates = UpdateReferences();
 
+                // Build the report from the results
+                var report = BuildReport(fileUpdates);
                 report.FinalizeReport();
 
                 if (report.Mappings.Count > 0)
@@ -77,6 +83,28 @@ namespace DivineDragon
                 Debug.LogError($"GUID synchronization failed: {ex.Message}");
                 throw;
             }
+        }
+
+        private GuidSyncReport BuildReport(Dictionary<FilePath, HashSet<Guid>> fileUpdates)
+        {
+            var report = new GuidSyncReport();
+
+            // Add all GUID mappings
+            foreach (var mapping in _guidMappings.Values)
+            {
+                report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
+            }
+
+            // Add file update references
+            foreach (var kvp in fileUpdates)
+            {
+                foreach (var guid in kvp.Value)
+                {
+                    report.AddReferenceUpdate(kvp.Key, guid);
+                }
+            }
+
+            return report;
         }
 
         private void ScanProjects()
@@ -109,9 +137,9 @@ namespace DivineDragon
             }
         }
 
-        private Dictionary<string, string> ScanMetaFiles(string projectPath)
+        private Dictionary<RelativePath, Guid> ScanMetaFiles(DirectoryPath projectPath)
         {
-            var metaFiles = new Dictionary<string, string>();
+            var metaFiles = new Dictionary<RelativePath, Guid>();
 
             // We only care about the Assets folder - that's where all the actual content that needs syncing lives
             // projectPath should already be pointing to the Assets folder, but guarding
@@ -138,7 +166,7 @@ namespace DivineDragon
 
             return metaFiles;
         }
-        private string GetRelativePath(string basePath, string fullPath)
+        private RelativePath GetRelativePath(DirectoryPath basePath, FilePath fullPath)
         {
             var baseUri = new Uri(basePath.EndsWith(Path.DirectorySeparatorChar.ToString())
                 ? basePath
@@ -148,21 +176,18 @@ namespace DivineDragon
             return Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
         }
 
-        private void UpdateReferences(GuidSyncReport report)
+        private Dictionary<FilePath, HashSet<Guid>> UpdateReferences()
         {
             Debug.Log($"Updating GUID references in Unity files in: {_subordinateProjectPath}");
 
             // Create mapping from old GUIDs to new GUIDs
-            var guidRemapping = _guidMappings.Values.ToDictionary(
+            var guidRemapping = _guidMappings.Values.ToDictionary<GuidMapping, Guid, Guid>(
                 m => m.SubordinateGuid,
                 m => m.MainGuid
             );
 
-            // Add all mappings to the report
-            foreach (var mapping in _guidMappings.Values)
-            {
-                report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
-            }
+            // Track which files had which GUIDs updated
+            var fileUpdates = new Dictionary<FilePath, HashSet<Guid>>();
 
             foreach (var filePath in Directory.GetFiles(_subordinateProjectPath, "*", SearchOption.AllDirectories))
             {
@@ -172,8 +197,14 @@ namespace DivineDragon
                 if (!IsUnityYamlFile(filePath))
                     continue;
 
-                UpdateFileReferences(filePath, guidRemapping, report);
+                var replacedGuids = UpdateFileReferences(filePath, guidRemapping);
+                if (replacedGuids.Count > 0)
+                {
+                    fileUpdates[filePath] = replacedGuids;
+                }
             }
+
+            return fileUpdates;
         }
 
         /// Checks if a file is a Unity YAML file by examining its header
@@ -194,12 +225,14 @@ namespace DivineDragon
         }
 
         /// Updates GUID references in a single file
-        private static void UpdateFileReferences(string filePath, Dictionary<string, string> guidMappings, GuidSyncReport report)
+        /// Returns the set of GUIDs that were replaced in the file
+        private static HashSet<Guid> UpdateFileReferences(FilePath filePath, Dictionary<Guid, Guid> guidMappings)
         {
+            var replacedGuids = new HashSet<Guid>();
+
             try
             {
                 string content = File.ReadAllText(filePath);
-                var replacedGuids = new HashSet<string>();
 
                 // Always check for simple GUID pattern (used in meta files and some asset files)
                 content = SimpleGuidRegex.Replace(content, match =>
@@ -231,12 +264,6 @@ namespace DivineDragon
                 if (replacedGuids.Count > 0)
                 {
                     File.WriteAllText(filePath, content);
-
-                    foreach (var guid in replacedGuids)
-                    {
-                        report.AddReferenceUpdate(filePath, guid);
-                    }
-
                     Debug.Log($"Updated GUID references in: {filePath}");
                 }
             }
@@ -244,6 +271,8 @@ namespace DivineDragon
             {
                 Debug.LogWarning($"Failed to update references in {filePath}: {ex.Message}");
             }
+
+            return replacedGuids;
         }
 
     }
