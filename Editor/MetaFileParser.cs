@@ -47,7 +47,7 @@ namespace DivineDragon
         }
 
         /// Updates the GUID in a Unity .meta file while preserving formatting
-        /// NOTE: Since we never existing files, and definitely don't copy meta files,
+        /// NOTE: Since we never copy existing files, and definitely don't copy meta files,
         /// this is mostly just for bookkeeping and testing purposes, and for the sake of making a "coherent" subordinate project
         /// that could still be used independently if desired.
         public static bool TryUpdateGuid(string metaFilePath, string newGuid)
