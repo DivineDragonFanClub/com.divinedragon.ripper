@@ -8,6 +8,7 @@ namespace DivineDragon
 {
     /// Report is good for proving that the process works and for debugging
     /// It contains lists of new files, skipped files, and GUID mappings between main and subordinate projects
+    /// Perhaps poorly named since it also is needed for our actual GUID mapping and dependency updating logic
     [Serializable]
     public class GuidSyncReport
     {

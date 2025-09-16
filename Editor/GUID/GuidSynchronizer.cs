@@ -58,8 +58,6 @@ namespace DivineDragon
 
                 Debug.Log($"Found {_guidMappings.Count} GUID differences to synchronize");
 
-                UpdateMetaFiles(report);
-
                 if (_guidMappings.Count > 0)
                 {
                     UpdateReferences(report);
@@ -115,8 +113,8 @@ namespace DivineDragon
         {
             var metaFiles = new Dictionary<string, string>();
 
-            // We only care about the Assets folder - that's where all the actual content lives
-            // projectPath should already be pointing to the Assets folder, but let's be explicit
+            // We only care about the Assets folder - that's where all the actual content that needs syncing lives
+            // projectPath should already be pointing to the Assets folder, but guarding
             string assetsPath = projectPath;
             if (!projectPath.EndsWith("Assets"))
             {
@@ -150,49 +148,23 @@ namespace DivineDragon
             return Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
         }
 
-        /// Currently somewhat pointless since we never copy over existing files, and thus have no
-        /// need to update their meta files. But leaving this here in case we ever do end up copying
-        /// files that already exist in the main project, with their meta files for some reason...
-        /// Could be good for making repairs?
-        private void UpdateMetaFiles(GuidSyncReport report)
-        {
-            Debug.Log("Updating meta files...");
-
-            foreach (var mapping in _guidMappings.Values)
-            {
-                var metaPath = Path.Combine(_subordinateProjectPath, mapping.RelativePath);
-
-                if (MetaFileParser.TryUpdateGuid(metaPath, mapping.MainGuid))
-                {
-                    report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
-                    Debug.Log($"Updated meta file: {mapping.RelativePath}");
-                }
-                else
-                {
-                    Debug.LogWarning($"Failed to update meta file: {metaPath}");
-                }
-            }
-        }
         private void UpdateReferences(GuidSyncReport report)
         {
-            Debug.Log("Updating GUID references in Unity files...");
+            Debug.Log($"Updating GUID references in Unity files in: {_subordinateProjectPath}");
 
+            // Create mapping from old GUIDs to new GUIDs
             var guidRemapping = _guidMappings.Values.ToDictionary(
                 m => m.SubordinateGuid,
                 m => m.MainGuid
             );
 
-            UpdateAllReferences(_subordinateProjectPath, guidRemapping, report);
-        }
+            // Add all mappings to the report
+            foreach (var mapping in _guidMappings.Values)
+            {
+                report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
+            }
 
-        /// Updates all GUID references in files within the specified directory
-        private static void UpdateAllReferences(string directory, Dictionary<string, string> guidMappings, GuidSyncReport report)
-        {
-            Debug.Log($"Updating GUID references in: {directory}");
-
-            var reverseMapping = new Dictionary<string, string>(guidMappings);
-
-            foreach (var filePath in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+            foreach (var filePath in Directory.GetFiles(_subordinateProjectPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath))
                     continue;
@@ -200,7 +172,7 @@ namespace DivineDragon
                 if (!IsUnityYamlFile(filePath))
                     continue;
 
-                UpdateFileReferences(filePath, reverseMapping, report);
+                UpdateFileReferences(filePath, guidRemapping, report);
             }
         }
 
@@ -227,11 +199,7 @@ namespace DivineDragon
             try
             {
                 string content = File.ReadAllText(filePath);
-                string originalContent = content;
                 var replacedGuids = new HashSet<string>();
-
-                // Check if this is a meta file
-                bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
 
                 // Always check for simple GUID pattern (used in meta files and some asset files)
                 content = SimpleGuidRegex.Replace(content, match =>
@@ -246,7 +214,7 @@ namespace DivineDragon
                 });
 
                 // Only check for complex pattern in non-meta files
-                if (!isMetaFile)
+                if (!MetaFileParser.IsMetaFile(filePath))
                 {
                     content = FileIdGuidRegex.Replace(content, match =>
                     {
@@ -260,7 +228,7 @@ namespace DivineDragon
                     });
                 }
 
-                if (content != originalContent)
+                if (replacedGuids.Count > 0)
                 {
                     File.WriteAllText(filePath, content);
 
