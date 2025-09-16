@@ -95,7 +95,7 @@ namespace DivineDragon
         /// Just checking if ends in .meta for now, nothing too fancy
         public static bool IsMetaFile(string filePath)
         {
-            return filePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase);
+            return filePath.EndsWith(".meta");
         }
     }
 }
