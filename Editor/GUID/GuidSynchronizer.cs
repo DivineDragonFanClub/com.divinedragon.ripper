@@ -97,13 +97,17 @@ namespace DivineDragon
         {
             var report = new GuidSyncReport();
 
-            // Add all GUID mappings
+            var replacedGuids = new HashSet<Guid>(updateResult.FileUpdates.SelectMany(kvp => kvp.Value));
+            var mappingBySubGuid = _guidMappings.Values.ToDictionary(m => m.SubordinateGuid, m => m);
+
             foreach (var mapping in _guidMappings.Values)
             {
-                report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
+                if (replacedGuids.Contains(mapping.SubordinateGuid))
+                {
+                    report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
+                }
             }
 
-            // Add file update references
             foreach (var kvp in updateResult.FileUpdates)
             {
                 foreach (var guid in kvp.Value)
@@ -122,12 +126,41 @@ namespace DivineDragon
                 {
                     if (seen.Add((remap.guid, remap.oldFileId, remap.newFileId)))
                     {
-                        report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
+                        if (mappingBySubGuid.TryGetValue(remap.guid, out var guidMapping))
+                        {
+                            var mappingPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
+                            report.AddFileIdRemapping(remap.guid, mappingPath, remap.oldFileId, remap.newFileId);
+                        }
+                        else
+                        {
+                            report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
+                        }
                     }
                 }
             }
 
             return report;
+        }
+
+        private static string ConvertRelativeAssetPath(RelativePath relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                return relativePath;
+            }
+
+            var normalized = relativePath.Replace(Path.DirectorySeparatorChar, '/');
+            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = "Assets/" + normalized.TrimStart('/');
+            }
+
+            if (normalized.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(0, normalized.Length - ".meta".Length);
+            }
+
+            return normalized;
         }
 
         private static string ConvertToUnityPathForReport(string filePath)

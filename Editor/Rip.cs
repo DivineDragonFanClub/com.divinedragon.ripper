@@ -110,75 +110,85 @@ namespace DivineDragon
         private static CopyResult CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
         {
             var result = new CopyResult();
-            var syncReport = new GuidSyncReport();
+            var initialReport = new GuidSyncReport();
 
-            foreach (string dirPath in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
+            var allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
+            var allFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
+
+            foreach (var dirPath in allDirectories)
             {
                 Directory.CreateDirectory(dirPath.Replace(sourceDir, targetDir));
             }
 
-            foreach (string filePath in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+            var newFiles = new List<string>();
+            var skippedFiles = new List<string>();
+
+            foreach (var filePath in allFiles)
             {
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
                 string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
 
                 bool targetExists = File.Exists(targetFilePath);
-                bool shouldOverwrite = forceImport && targetExists;
-                bool shouldCopy = !targetExists || shouldOverwrite;
-
-                if (shouldCopy)
-                {
-                    File.Copy(filePath, targetFilePath, true);
-                }
 
                 if (!isMetaFile)
                 {
                     if (!targetExists)
                     {
                         result.NewFiles++;
-                        syncReport.AddNewFile(unityRelativeTarget);
+                        newFiles.Add(unityRelativeTarget);
                     }
                     else
                     {
                         result.SkippedFiles++;
-                        syncReport.AddSkippedFile(unityRelativeTarget);
+                        skippedFiles.Add(unityRelativeTarget);
                     }
                 }
             }
 
-            GuidSyncReport fullReport = syncReport;
+            foreach (var path in newFiles)
+            {
+                initialReport.AddNewFile(path);
+            }
 
-            if (result.SkippedFiles > 0 && !forceImport)
+            foreach (var path in skippedFiles)
+            {
+                initialReport.AddSkippedFile(path);
+            }
+
+            GuidSyncReport fullReport;
+            if (result.SkippedFiles > 0)
             {
                 Debug.Log($"Found {result.SkippedFiles} existing files - synchronizing GUIDs...");
                 fullReport = SynchronizeGuids(targetDir, sourceDir) ?? new GuidSyncReport();
 
-                foreach (var file in syncReport.NewFilesImported)
+                foreach (var path in newFiles)
                 {
-                    fullReport.AddNewFile(file);
+                    fullReport.AddNewFile(path);
                 }
 
-                foreach (var skipped in syncReport.SkippedFiles)
+                foreach (var path in skippedFiles)
                 {
-                    fullReport.AddSkippedFile(skipped);
+                    fullReport.AddSkippedFile(path);
                 }
 
                 fullReport.FinalizeReport();
             }
             else
             {
-                if (result.SkippedFiles == 0)
-                {
-                    Debug.Log("All files are new - skipping GUID synchronization");
-                }
-                else if (forceImport)
-                {
-                    Debug.Log("Force import enabled - skipping GUID synchronization for overwritten files");
-                }
+                Debug.Log("All files are new - skipping GUID synchronization");
+                initialReport.FinalizeReport();
+                fullReport = initialReport;
+            }
 
-                syncReport.FinalizeReport();
-                fullReport = syncReport;
+            foreach (var filePath in allFiles)
+            {
+                string targetFilePath = filePath.Replace(sourceDir, targetDir);
+                bool targetExists = File.Exists(targetFilePath);
+                if (targetExists && !forceImport)
+                    continue;
+
+                File.Copy(filePath, targetFilePath, true);
             }
 
             result.SyncReport = fullReport;

@@ -136,28 +136,25 @@ namespace DivineDragon
 
             _scrollView.Clear();
 
+            var fileIdLookup = BuildFileIdLookup();
+
             if (_report.NewFilesImported != null && _report.NewFilesImported.Count > 0)
             {
-                var newFilesSection = CreateNewFilesSection();
+                var newFilesSection = CreateNewFilesSection(fileIdLookup);
                 _scrollView.Add(newFilesSection);
+            }
+
+            if ((_report.Mappings != null && _report.Mappings.Count > 0) ||
+                (_report.FileIdRemappings != null && _report.FileIdRemappings.Count > 0))
+            {
+                var remappedFilesSection = CreateRemappedFilesSection(CloneLookup(fileIdLookup));
+                _scrollView.Add(remappedFilesSection);
             }
 
             if (_report.SkippedFiles != null && _report.SkippedFiles.Count > 0)
             {
                 var skippedFilesSection = CreateSkippedFilesSection();
                 _scrollView.Add(skippedFilesSection);
-            }
-
-            if (_report.Mappings != null && _report.Mappings.Count > 0)
-            {
-                var remappedFilesSection = CreateRemappedFilesSection();
-                _scrollView.Add(remappedFilesSection);
-            }
-
-            if (_report.FileIdRemappings != null && _report.FileIdRemappings.Count > 0)
-            {
-                var fileIdSection = CreateFileIdRemappingSection();
-                _scrollView.Add(fileIdSection);
             }
 
             var exportSection = CreateExportSection();
@@ -222,14 +219,46 @@ namespace DivineDragon
             return section;
         }
 
-        private VisualElement CreateRemappedFilesSection()
+        private Dictionary<string, List<FileIdRemapping>> BuildFileIdLookup()
+        {
+            var lookup = new Dictionary<string, List<FileIdRemapping>>();
+            if (_report.FileIdRemappings != null)
+            {
+                foreach (var remap in _report.FileIdRemappings)
+                {
+                    var key = NormalizePath(remap.FilePath);
+                    if (!lookup.TryGetValue(key, out var list))
+                    {
+                        list = new List<FileIdRemapping>();
+                        lookup[key] = list;
+                    }
+                    list.Add(remap);
+                }
+            }
+            return lookup;
+        }
+
+        private Dictionary<string, List<FileIdRemapping>> CloneLookup(Dictionary<string, List<FileIdRemapping>> source)
+        {
+            var clone = new Dictionary<string, List<FileIdRemapping>>();
+            foreach (var kvp in source)
+            {
+                clone[kvp.Key] = new List<FileIdRemapping>(kvp.Value);
+            }
+            return clone;
+        }
+
+        private VisualElement CreateRemappedFilesSection(Dictionary<string, List<FileIdRemapping>> fileIdLookup)
         {
             var section = new VisualElement();
             section.style.marginBottom = 20;
             section.style.marginTop = 10;
 
+            int guidCount = _report.Mappings?.Count ?? 0;
+            int fileIdCount = _report.FileIdRemappings?.Count ?? 0;
+
             var foldout = new Foldout();
-            foldout.text = $"UUID Mappings ({_report.Mappings.Count})";
+            foldout.text = $"Remapped IDs (GUID {guidCount}, FileID {fileIdCount})";
             foldout.value = false; // Start collapsed
             foldout.style.fontSize = 14;
 
@@ -246,162 +275,37 @@ namespace DivineDragon
             scrollView.style.borderBottomRightRadius = 5;
             scrollView.style.marginTop = 8;
 
-            var sortedMappings = _report.Mappings.OrderBy(m => m.AssetName);
+            var sortedMappings = (_report.Mappings ?? new List<GuidMapping>()).OrderBy(m => m.AssetName);
 
             foreach (var mapping in sortedMappings)
             {
-                var container = new VisualElement();
-                container.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.3f);
-                container.style.paddingTop = 10;
-                container.style.paddingBottom = 10;
-                container.style.paddingLeft = 12;
-                container.style.paddingRight = 12;
-                container.style.marginBottom = 8;
-                container.style.borderTopLeftRadius = 4;
-                container.style.borderTopRightRadius = 4;
-                container.style.borderBottomLeftRadius = 4;
-                container.style.borderBottomRightRadius = 4;
+                var displayPath = ConvertToUnityAssetPath(mapping.AssetPath.Replace(".meta", ""));
+                var lookupKey = NormalizePath(displayPath);
 
-                var fileButton = new Button(() =>
+                var container = BuildRemapContainer(displayPath);
+
+            container.Add(BuildGuidRow(mapping.OldGuid, mapping.NewGuid));
+
+                if (fileIdLookup.TryGetValue(lookupKey, out var remapsForFile))
                 {
-                    string projectPath = ConvertToUnityAssetPath(mapping.AssetPath.Replace(".meta", ""));
-                    SelectAssetInProject(projectPath);
-                })
-                {
-                    text = ConvertToUnityAssetPath(mapping.AssetPath.Replace(".meta", ""))
-                };
-                fileButton.style.unityFontStyleAndWeight = FontStyle.Bold;
-                fileButton.style.fontSize = 12;
-                fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
-                fileButton.style.backgroundColor = Color.clear;
-                fileButton.style.borderLeftWidth = 0;
-                fileButton.style.borderRightWidth = 0;
-                fileButton.style.borderTopWidth = 0;
-                fileButton.style.borderBottomWidth = 0;
-                fileButton.style.marginBottom = 5;
+                    foreach (var remap in remapsForFile)
+                    {
+                        container.Add(BuildFileIdRow(remap));
+                    }
 
-                fileButton.RegisterCallback<MouseEnterEvent>((evt) =>
-                {
-                    fileButton.style.color = new Color(0.6f, 0.8f, 1f);
-                });
-                fileButton.RegisterCallback<MouseLeaveEvent>((evt) =>
-                {
-                    fileButton.style.color = Color.white;
-                });
+                    fileIdLookup.Remove(lookupKey);
+                }
 
-                container.Add(fileButton);
-
-                var guidContainer = new VisualElement();
-                guidContainer.style.flexDirection = FlexDirection.Row;
-                guidContainer.style.alignItems = Align.Center;
-                guidContainer.style.marginLeft = 10;
-
-                var oldGuidButton = CreateGuidButton(mapping.OldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
-                guidContainer.Add(oldGuidButton);
-
-                var arrowLabel = new Label(" → ");
-                arrowLabel.style.fontSize = 11;
-                arrowLabel.style.marginLeft = 5;
-                arrowLabel.style.marginRight = 5;
-                guidContainer.Add(arrowLabel);
-
-                var newGuidButton = CreateGuidButton(mapping.NewGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
-                guidContainer.Add(newGuidButton);
-
-                container.Add(guidContainer);
                 scrollView.Add(container);
             }
 
-            foldout.Add(scrollView);
-            section.Add(foldout);
-            return section;
-        }
-
-        private VisualElement CreateFileIdRemappingSection()
-        {
-            var section = new VisualElement();
-            section.style.marginBottom = 20;
-            section.style.marginTop = 10;
-
-            var foldout = new Foldout();
-            foldout.text = $"FileID Remappings ({_report.FileIdRemappings.Count})";
-            foldout.value = false;
-            foldout.style.fontSize = 14;
-
-            var scrollView = new ScrollView(ScrollViewMode.Vertical);
-            scrollView.style.maxHeight = 300;
-            scrollView.style.backgroundColor = new Color(0.15f, 0.18f, 0.2f, 0.1f);
-            scrollView.style.paddingTop = 10;
-            scrollView.style.paddingBottom = 10;
-            scrollView.style.paddingLeft = 10;
-            scrollView.style.paddingRight = 10;
-            scrollView.style.borderTopLeftRadius = 5;
-            scrollView.style.borderTopRightRadius = 5;
-            scrollView.style.borderBottomLeftRadius = 5;
-            scrollView.style.borderBottomRightRadius = 5;
-            scrollView.style.marginTop = 8;
-
-            var grouped = _report.FileIdRemappings
-                .GroupBy(r => r.FilePath)
-                .OrderBy(g => g.Key);
-
-            foreach (var group in grouped)
+            foreach (var kvp in fileIdLookup.OrderBy(k => k.Key))
             {
-                var container = new VisualElement();
-                container.style.backgroundColor = new Color(0.2f, 0.22f, 0.25f, 0.25f);
-                container.style.paddingTop = 10;
-                container.style.paddingBottom = 10;
-                container.style.paddingLeft = 12;
-                container.style.paddingRight = 12;
-                container.style.marginBottom = 8;
-                container.style.borderTopLeftRadius = 4;
-                container.style.borderTopRightRadius = 4;
-                container.style.borderBottomLeftRadius = 4;
-                container.style.borderBottomRightRadius = 4;
+                var container = BuildRemapContainer(kvp.Key);
 
-                string unifiedPath = group.Key.Replace('\\', '/');
-
-                var fileButton = new Button(() =>
+                foreach (var remap in kvp.Value)
                 {
-                    SelectAssetInProject(unifiedPath);
-                })
-                {
-                    text = unifiedPath
-                };
-                fileButton.style.unityFontStyleAndWeight = FontStyle.Bold;
-                fileButton.style.fontSize = 12;
-                fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
-                fileButton.style.backgroundColor = Color.clear;
-                fileButton.style.borderLeftWidth = 0;
-                fileButton.style.borderRightWidth = 0;
-                fileButton.style.borderTopWidth = 0;
-                fileButton.style.borderBottomWidth = 0;
-                fileButton.style.marginBottom = 5;
-                container.Add(fileButton);
-
-                foreach (var remap in group)
-                {
-                    var row = new VisualElement();
-                    row.style.flexDirection = FlexDirection.Row;
-                    row.style.alignItems = Align.Center;
-                    row.style.marginLeft = 10;
-                    row.style.marginBottom = 4;
-
-                    var fileIdLabel = new Label($"FileID: {remap.OldFileId} → {remap.NewFileId}");
-                    fileIdLabel.style.fontSize = 11;
-                    row.Add(fileIdLabel);
-
-                    var spacer = new Label("  |  ");
-                    spacer.style.fontSize = 10;
-                    spacer.style.marginLeft = 8;
-                    spacer.style.marginRight = 8;
-                    row.Add(spacer);
-
-                    var guidButton = CreateGuidButton(remap.FileGuid, "GUID", new Color(0.15f, 0.2f, 0.28f, 0.2f));
-                    guidButton.style.marginRight = 6;
-                    row.Add(guidButton);
-
-                    container.Add(row);
+                    container.Add(BuildFileIdRow(remap));
                 }
 
                 scrollView.Add(container);
@@ -412,7 +316,124 @@ namespace DivineDragon
             return section;
         }
 
-        private VisualElement CreateNewFilesSection()
+        private VisualElement BuildRemapContainer(string displayPath)
+        {
+            var container = new VisualElement();
+            container.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.3f);
+            container.style.paddingTop = 10;
+            container.style.paddingBottom = 10;
+            container.style.paddingLeft = 12;
+            container.style.paddingRight = 12;
+            container.style.marginBottom = 8;
+            container.style.borderTopLeftRadius = 4;
+            container.style.borderTopRightRadius = 4;
+            container.style.borderBottomLeftRadius = 4;
+            container.style.borderBottomRightRadius = 4;
+
+            var resolvedPath = ConvertToUnityAssetPath(displayPath);
+
+            var fileButton = new Button(() =>
+            {
+                SelectAssetInProject(resolvedPath);
+            })
+            {
+                text = resolvedPath
+            };
+            fileButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            fileButton.style.fontSize = 12;
+            fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+            fileButton.style.backgroundColor = Color.clear;
+            fileButton.style.borderLeftWidth = 0;
+            fileButton.style.borderRightWidth = 0;
+            fileButton.style.borderTopWidth = 0;
+            fileButton.style.borderBottomWidth = 0;
+            fileButton.style.marginBottom = 5;
+
+            fileButton.RegisterCallback<MouseEnterEvent>((evt) =>
+            {
+                fileButton.style.color = new Color(0.6f, 0.8f, 1f);
+            });
+            fileButton.RegisterCallback<MouseLeaveEvent>((evt) =>
+            {
+                fileButton.style.color = Color.white;
+            });
+
+            container.Add(fileButton);
+            return container;
+        }
+
+        private VisualElement BuildFileIdRow(FileIdRemapping remap)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.marginLeft = 10;
+            row.style.marginTop = 4;
+
+            var label = new Label("FileID:");
+            label.style.fontSize = 9;
+            label.style.marginRight = 6;
+            row.Add(label);
+
+            var oldIdButton = CreateCopyButton(remap.OldFileId.ToString(), new Color(0.3f, 0.15f, 0.15f, 0.2f));
+            oldIdButton.style.fontSize = 9;
+            row.Add(oldIdButton);
+
+            var arrowLabel = new Label(" → ");
+            arrowLabel.style.fontSize = 9;
+            arrowLabel.style.marginLeft = 6;
+            arrowLabel.style.marginRight = 6;
+            row.Add(arrowLabel);
+
+            var newIdButton = CreateCopyButton(remap.NewFileId.ToString(), new Color(0.15f, 0.3f, 0.15f, 0.2f));
+            newIdButton.style.fontSize = 9;
+            row.Add(newIdButton);
+
+            return row;
+        }
+
+        private string NormalizePath(string rawPath)
+        {
+            if (string.IsNullOrEmpty(rawPath))
+            {
+                return rawPath;
+            }
+
+            var withoutMeta = rawPath.Replace(".meta", string.Empty);
+            return withoutMeta.Replace('\\', '/');
+        }
+
+        private VisualElement BuildGuidRow(string oldGuid, string newGuid)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.marginLeft = 10;
+            row.style.marginTop = 4;
+
+            var label = new Label("GUID:");
+            label.style.fontSize = 9;
+            label.style.marginRight = 6;
+            row.Add(label);
+
+            var oldGuidButton = CreateGuidButton(oldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
+            oldGuidButton.style.fontSize = 9;
+            row.Add(oldGuidButton);
+
+            var arrowLabel = new Label(" → ");
+            arrowLabel.style.fontSize = 9;
+            arrowLabel.style.marginLeft = 6;
+            arrowLabel.style.marginRight = 6;
+            row.Add(arrowLabel);
+
+            var newGuidButton = CreateGuidButton(newGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
+            newGuidButton.style.fontSize = 9;
+            row.Add(newGuidButton);
+
+            return row;
+        }
+
+        private VisualElement CreateNewFilesSection(Dictionary<string, List<FileIdRemapping>> fileIdLookup)
         {
             var section = new VisualElement();
             section.style.marginBottom = 20;
@@ -441,7 +462,7 @@ namespace DivineDragon
                 string projectPath = file;
 
                 var fileContainer = new VisualElement();
-                fileContainer.style.marginBottom = 5;
+                fileContainer.style.marginBottom = 8;
 
                 var fileButton = new Button(() =>
                 {
@@ -471,23 +492,37 @@ namespace DivineDragon
 
                 fileContainer.Add(fileButton);
 
+                var fileLevelFileIds = fileIdLookup.TryGetValue(projectPath, out var fileRemaps)
+                    ? fileRemaps
+                    : null;
+                if (fileLevelFileIds != null)
+                {
+                    foreach (var remap in fileLevelFileIds)
+                    {
+                        fileContainer.Add(BuildFileIdRow(remap));
+                    }
+                }
+
                 if (_report.FileDependencyUpdates != null && _report.FileDependencyUpdates.ContainsKey(projectPath))
                 {
                     var dependencies = _report.FileDependencyUpdates[projectPath];
                     foreach (var dep in dependencies)
                     {
-                        var depContainer = new VisualElement();
-                        depContainer.style.flexDirection = FlexDirection.Row;
-                        depContainer.style.alignItems = Align.Center;
-                        depContainer.style.marginLeft = 25;
-                        depContainer.style.marginTop = 2;
-                        depContainer.style.marginBottom = 2;
+                        var depColumn = new VisualElement();
+                        depColumn.style.marginLeft = 25;
+                        depColumn.style.marginTop = 2;
+                        depColumn.style.marginBottom = 4;
+                        depColumn.style.flexDirection = FlexDirection.Column;
+
+                        var depHeader = new VisualElement();
+                        depHeader.style.flexDirection = FlexDirection.Row;
+                        depHeader.style.alignItems = Align.Center;
 
                         var arrowLabel = new Label("→");
                         arrowLabel.style.fontSize = 10;
                         arrowLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
                         arrowLabel.style.marginRight = 5;
-                        depContainer.Add(arrowLabel);
+                        depHeader.Add(arrowLabel);
 
                         var depButton = new Button(() =>
                         {
@@ -495,7 +530,7 @@ namespace DivineDragon
                             SelectAssetInProject(depProjectPath);
                         })
                         {
-                            text = $"{dep.DependencyName}:"
+                            text = dep.DependencyName
                         };
                         depButton.style.fontSize = 10;
                         depButton.style.color = new Color(0.7f, 0.7f, 0.7f);
@@ -516,23 +551,21 @@ namespace DivineDragon
                             depButton.style.color = new Color(0.7f, 0.7f, 0.7f);
                         });
 
-                        depContainer.Add(depButton);
+                        depHeader.Add(depButton);
+                        depColumn.Add(depHeader);
 
-                        var oldGuidButton = CreateGuidButton(dep.OldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
-                        oldGuidButton.style.fontSize = 9;
-                        depContainer.Add(oldGuidButton);
+                        depColumn.Add(BuildGuidRow(dep.OldGuid, dep.NewGuid));
 
-                        var depArrowLabel = new Label(" → ");
-                        depArrowLabel.style.fontSize = 9;
-                        depArrowLabel.style.marginLeft = 4;
-                        depArrowLabel.style.marginRight = 4;
-                        depContainer.Add(depArrowLabel);
+                        var depPathNormalized = NormalizePath(ConvertToUnityAssetPath(dep.DependencyPath.Replace(".meta", "")));
+                        if (fileIdLookup.TryGetValue(depPathNormalized, out var depFileIds))
+                        {
+                            foreach (var remap in depFileIds)
+                            {
+                                depColumn.Add(BuildFileIdRow(remap));
+                            }
+                        }
 
-                        var newGuidButton = CreateGuidButton(dep.NewGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
-                        newGuidButton.style.fontSize = 9;
-                        depContainer.Add(newGuidButton);
-
-                        fileContainer.Add(depContainer);
+                        fileContainer.Add(depColumn);
                     }
                 }
 
@@ -665,6 +698,29 @@ namespace DivineDragon
 
             button.style.fontSize = 9;
             button.style.backgroundColor = backgroundColor ?? new Color(0.15f, 0.15f, 0.2f, 0.3f);
+            button.style.borderLeftWidth = 0;
+            button.style.borderRightWidth = 0;
+            button.style.borderTopWidth = 0;
+            button.style.borderBottomWidth = 0;
+            button.style.paddingLeft = 2;
+            button.style.paddingRight = 2;
+
+            return button;
+        }
+
+        private Button CreateCopyButton(string text, Color? backgroundColor = null)
+        {
+            var button = new Button(() =>
+            {
+                GUIUtility.systemCopyBuffer = text;
+                Debug.Log($"Copied value to clipboard: {text}");
+            })
+            {
+                text = text
+            };
+
+            button.style.fontSize = 9;
+            button.style.backgroundColor = backgroundColor ?? new Color(0.2f, 0.2f, 0.2f, 0.3f);
             button.style.borderLeftWidth = 0;
             button.style.borderRightWidth = 0;
             button.style.borderTopWidth = 0;

@@ -163,13 +163,36 @@ namespace DivineDragon
 
         public string ToJson()
         {
+            string NormalizePath(string path)
+            {
+                if (string.IsNullOrEmpty(path))
+                    return path;
+                return path.Replace(".meta", string.Empty).Replace('\\', '/');
+            }
+
+            JsonFileIdRemap[] MapFileIdsForPath(string path)
+            {
+                var normalized = NormalizePath(path);
+                return FileIdRemappings
+                    .Where(r => NormalizePath(r.FilePath) == normalized)
+                    .Select(r => new JsonFileIdRemap
+                    {
+                        filePath = NormalizePath(r.FilePath),
+                        guid = r.FileGuid,
+                        oldFileId = r.OldFileId,
+                        newFileId = r.NewFileId
+                    })
+                    .ToArray();
+            }
+
             var newFilesWithDeps = new List<JsonFileWithDependencies>();
             foreach (var file in NewFilesImported)
             {
                 var fileWithDeps = new JsonFileWithDependencies
                 {
                     filePath = file,
-                    dependencies = new List<JsonDependencyMapping>()
+                    dependencies = new List<JsonDependencyMapping>(),
+                    fileIdRemappings = MapFileIdsForPath(file)
                 };
 
                 if (FileDependencyUpdates.TryGetValue(file, out var deps))
@@ -181,7 +204,8 @@ namespace DivineDragon
                             dependencyName = dep.DependencyName,
                             dependencyPath = dep.DependencyPath.Replace(".meta", ""),
                             oldGuid = dep.OldGuid,
-                            newGuid = dep.NewGuid
+                            newGuid = dep.NewGuid,
+                            fileIdRemappings = MapFileIdsForPath(dep.DependencyPath)
                         });
                     }
                 }
@@ -198,7 +222,8 @@ namespace DivineDragon
                     assetPath = m.AssetPath.Replace(".meta", ""),
                     assetName = m.AssetName,
                     oldGuid = m.OldGuid,
-                    newGuid = m.NewGuid
+                    newGuid = m.NewGuid,
+                    fileIdRemappings = MapFileIdsForPath(m.AssetPath)
                 }).ToArray()
             };
 
@@ -218,6 +243,7 @@ namespace DivineDragon
         {
             public string filePath;
             public List<JsonDependencyMapping> dependencies;
+            public JsonFileIdRemap[] fileIdRemappings;
         }
 
         [Serializable]
@@ -227,6 +253,7 @@ namespace DivineDragon
             public string dependencyPath;
             public string oldGuid;
             public string newGuid;
+            public JsonFileIdRemap[] fileIdRemappings;
         }
 
         [Serializable]
@@ -236,6 +263,16 @@ namespace DivineDragon
             public string assetName;
             public string oldGuid;
             public string newGuid;
+            public JsonFileIdRemap[] fileIdRemappings;
+        }
+
+        [Serializable]
+        private class JsonFileIdRemap
+        {
+            public string filePath;
+            public string guid;
+            public long oldFileId;
+            public long newFileId;
         }
     }
 
