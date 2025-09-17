@@ -9,6 +9,7 @@ using Guid = System.String;
 using FilePath = System.String;
 using RelativePath = System.String;
 using AssetPath = System.String;
+using FileID = System.Int64;
 
 namespace DivineDragon
 {
@@ -24,6 +25,8 @@ namespace DivineDragon
 
         public List<GuidMapping> Mappings { get; private set; }
 
+        public List<FileIdRemapping> FileIdRemappings { get; private set; }
+
         [SerializeField]
         private List<FileDependencyMapping> _fileDependencyMappings;
 
@@ -36,6 +39,7 @@ namespace DivineDragon
             NewFilesImported = new List<FilePath>();
             SkippedFiles = new List<FilePath>();
             Mappings = new List<GuidMapping>();
+            FileIdRemappings = new List<FileIdRemapping>();
             _fileDependencyMappings = new List<FileDependencyMapping>();
         }
 
@@ -135,12 +139,24 @@ namespace DivineDragon
             }
         }
 
+        public void AddFileIdRemapping(Guid fileGuid, FilePath filePath, FileID oldFileId, FileID newFileId)
+        {
+            FileIdRemappings.Add(new FileIdRemapping
+            {
+                FileGuid = fileGuid,
+                FilePath = filePath,
+                OldFileId = oldFileId,
+                NewFileId = newFileId
+            });
+        }
+
         public void FinalizeReport()
         {
             var sb = new StringBuilder();
             sb.AppendLine($"New Files Imported: {NewFilesImported.Count}");
             sb.AppendLine($"Files Skipped: {SkippedFiles.Count}");
             sb.AppendLine($"UUID Mappings: {Mappings.Count}");
+            sb.AppendLine($"FileID Remappings: {FileIdRemappings.Count}");
 
             SummaryText = sb.ToString();
         }
@@ -246,5 +262,14 @@ namespace DivineDragon
     {
         public FilePath FilePath { get; set; }
         public List<DependencyUpdate> Dependencies { get; set; }
+    }
+
+    [Serializable]
+    public class FileIdRemapping
+    {
+        public Guid FileGuid { get; set; }
+        public FilePath FilePath { get; set; }
+        public FileID OldFileId { get; set; }
+        public FileID NewFileId { get; set; }
     }
 }

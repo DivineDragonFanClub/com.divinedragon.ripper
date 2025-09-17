@@ -154,6 +154,12 @@ namespace DivineDragon
                 _scrollView.Add(remappedFilesSection);
             }
 
+            if (_report.FileIdRemappings != null && _report.FileIdRemappings.Count > 0)
+            {
+                var fileIdSection = CreateFileIdRemappingSection();
+                _scrollView.Add(fileIdSection);
+            }
+
             var exportSection = CreateExportSection();
             _scrollView.Add(exportSection);
         }
@@ -303,6 +309,101 @@ namespace DivineDragon
                 guidContainer.Add(newGuidButton);
 
                 container.Add(guidContainer);
+                scrollView.Add(container);
+            }
+
+            foldout.Add(scrollView);
+            section.Add(foldout);
+            return section;
+        }
+
+        private VisualElement CreateFileIdRemappingSection()
+        {
+            var section = new VisualElement();
+            section.style.marginBottom = 20;
+            section.style.marginTop = 10;
+
+            var foldout = new Foldout();
+            foldout.text = $"FileID Remappings ({_report.FileIdRemappings.Count})";
+            foldout.value = false;
+            foldout.style.fontSize = 14;
+
+            var scrollView = new ScrollView(ScrollViewMode.Vertical);
+            scrollView.style.maxHeight = 300;
+            scrollView.style.backgroundColor = new Color(0.15f, 0.18f, 0.2f, 0.1f);
+            scrollView.style.paddingTop = 10;
+            scrollView.style.paddingBottom = 10;
+            scrollView.style.paddingLeft = 10;
+            scrollView.style.paddingRight = 10;
+            scrollView.style.borderTopLeftRadius = 5;
+            scrollView.style.borderTopRightRadius = 5;
+            scrollView.style.borderBottomLeftRadius = 5;
+            scrollView.style.borderBottomRightRadius = 5;
+            scrollView.style.marginTop = 8;
+
+            var grouped = _report.FileIdRemappings
+                .GroupBy(r => r.FilePath)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in grouped)
+            {
+                var container = new VisualElement();
+                container.style.backgroundColor = new Color(0.2f, 0.22f, 0.25f, 0.25f);
+                container.style.paddingTop = 10;
+                container.style.paddingBottom = 10;
+                container.style.paddingLeft = 12;
+                container.style.paddingRight = 12;
+                container.style.marginBottom = 8;
+                container.style.borderTopLeftRadius = 4;
+                container.style.borderTopRightRadius = 4;
+                container.style.borderBottomLeftRadius = 4;
+                container.style.borderBottomRightRadius = 4;
+
+                string unifiedPath = group.Key.Replace('\\', '/');
+
+                var fileButton = new Button(() =>
+                {
+                    SelectAssetInProject(unifiedPath);
+                })
+                {
+                    text = unifiedPath
+                };
+                fileButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+                fileButton.style.fontSize = 12;
+                fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+                fileButton.style.backgroundColor = Color.clear;
+                fileButton.style.borderLeftWidth = 0;
+                fileButton.style.borderRightWidth = 0;
+                fileButton.style.borderTopWidth = 0;
+                fileButton.style.borderBottomWidth = 0;
+                fileButton.style.marginBottom = 5;
+                container.Add(fileButton);
+
+                foreach (var remap in group)
+                {
+                    var row = new VisualElement();
+                    row.style.flexDirection = FlexDirection.Row;
+                    row.style.alignItems = Align.Center;
+                    row.style.marginLeft = 10;
+                    row.style.marginBottom = 4;
+
+                    var fileIdLabel = new Label($"FileID: {remap.OldFileId} → {remap.NewFileId}");
+                    fileIdLabel.style.fontSize = 11;
+                    row.Add(fileIdLabel);
+
+                    var spacer = new Label("  |  ");
+                    spacer.style.fontSize = 10;
+                    spacer.style.marginLeft = 8;
+                    spacer.style.marginRight = 8;
+                    row.Add(spacer);
+
+                    var guidButton = CreateGuidButton(remap.FileGuid, "GUID", new Color(0.15f, 0.2f, 0.28f, 0.2f));
+                    guidButton.style.marginRight = 6;
+                    row.Add(guidButton);
+
+                    container.Add(row);
+                }
+
                 scrollView.Add(container);
             }
 

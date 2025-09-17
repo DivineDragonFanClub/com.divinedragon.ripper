@@ -9,6 +9,52 @@ namespace DivineDragon
     public class DivineRipperWindow
     {
         private Color cobaltBlue = new Color(0.0f, 0.28f, 0.67f, 1.0f);
+
+        private const string LastExportPathKey = "DivineDragon.DivineRipper.LastExportPath";
+        private const string PreviousExportPathKey = "DivineDragon.DivineRipper.PreviousExportPath";
+
+        public static string GetLastExportPath()
+        {
+            return EditorPrefs.GetString(LastExportPathKey, string.Empty);
+        }
+
+        public static string GetPreviousExportPath()
+        {
+            return EditorPrefs.GetString(PreviousExportPathKey, string.Empty);
+        }
+
+        private static string CreatePersistentExportFolder(string suggestedName)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            string exportRoot = Path.Combine(projectRoot, "AssetRipperExports");
+            Directory.CreateDirectory(exportRoot);
+
+            string safeName = string.IsNullOrEmpty(suggestedName)
+                ? "Export"
+                : suggestedName.Replace(Path.DirectorySeparatorChar, '_').Replace(Path.AltDirectorySeparatorChar, '_');
+
+            foreach (char invalid in Path.GetInvalidFileNameChars())
+            {
+                safeName = safeName.Replace(invalid, '_');
+            }
+
+            string stampedFolder = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}";
+            string exportPath = Path.Combine(exportRoot, stampedFolder);
+            Directory.CreateDirectory(exportPath);
+
+            return exportPath;
+        }
+
+        private static void RememberExportPath(string exportPath)
+        {
+            string lastPath = EditorPrefs.GetString(LastExportPathKey, string.Empty);
+            if (!string.IsNullOrEmpty(lastPath))
+            {
+                EditorPrefs.SetString(PreviousExportPathKey, lastPath);
+            }
+
+            EditorPrefs.SetString(LastExportPathKey, exportPath);
+        }
         
         // Validator for ExtractBundle
         [MenuItem("Divine Dragon/Divine Ripper/Extract a bundle", true)]
@@ -32,9 +78,8 @@ namespace DivineDragon
             if (string.IsNullOrEmpty(path))
                 return;
 
-            // Create temp folder with unique GUID
-            string tempOutputPath = Path.Combine(Path.GetTempPath(), "AssetRipperOutput_" + System.Guid.NewGuid().ToString());
-            Directory.CreateDirectory(tempOutputPath);
+            string inputName = Path.GetFileNameWithoutExtension(path);
+            string exportPath = CreatePersistentExportFolder(inputName);
 
             EditorUtility.DisplayProgressBar("AssetRipper", "Starting AssetRipper...", 0.1f);
 
@@ -43,14 +88,15 @@ namespace DivineDragon
                 bool success = Rip.RunAssetRipper(
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
-                    tempOutputPath,
+                    exportPath,
                     InputMode.File,
                     false);
 
                 if (success)
                 {
+                    RememberExportPath(exportPath);
                     EditorUtility.DisplayDialog("Success",
-                        $"Assets extracted successfully",
+                        $"Assets extracted successfully. Export kept at:\n{exportPath}",
                         "OK");
                 }
                 else
@@ -71,20 +117,6 @@ namespace DivineDragon
             finally
             {
                 EditorUtility.ClearProgressBar();
-
-                // Clean up temp folder
-                try
-                {
-                    if (Directory.Exists(tempOutputPath))
-                    {
-                        Directory.Delete(tempOutputPath, true);
-                        Debug.Log($"Cleaned up temporary extraction folder: {tempOutputPath}");
-                    }
-                }
-                catch (Exception cleanupEx)
-                {
-                    Debug.LogWarning($"Failed to clean up temp folder: {cleanupEx.Message}");
-                }
             }
         }
 
@@ -108,9 +140,8 @@ namespace DivineDragon
             if (string.IsNullOrEmpty(path))
                 return;
 
-            // Create temp folder with unique GUID
-            string tempOutputPath = Path.Combine(Path.GetTempPath(), "AssetRipperOutput_" + System.Guid.NewGuid().ToString());
-            Directory.CreateDirectory(tempOutputPath);
+            string folderName = new DirectoryInfo(path).Name;
+            string exportPath = CreatePersistentExportFolder(folderName);
 
             EditorUtility.DisplayProgressBar("AssetRipper", "Starting AssetRipper...", 0.1f);
 
@@ -119,14 +150,15 @@ namespace DivineDragon
                 bool success = Rip.RunAssetRipper(
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
-                    tempOutputPath,
+                    exportPath,
                     InputMode.Folder,
                     false);
 
                 if (success)
                 {
+                    RememberExportPath(exportPath);
                     EditorUtility.DisplayDialog("Success",
-                        $"Assets extracted successfully",
+                        $"Assets extracted successfully. Export kept at:\n{exportPath}",
                         "OK");
                 }
                 else
@@ -147,20 +179,6 @@ namespace DivineDragon
             finally
             {
                 EditorUtility.ClearProgressBar();
-
-                // Clean up temp folder
-                try
-                {
-                    if (Directory.Exists(tempOutputPath))
-                    {
-                        Directory.Delete(tempOutputPath, true);
-                        Debug.Log($"Cleaned up temporary extraction folder: {tempOutputPath}");
-                    }
-                }
-                catch (Exception cleanupEx)
-                {
-                    Debug.LogWarning($"Failed to clean up temp folder: {cleanupEx.Message}");
-                }
             }
         }
         

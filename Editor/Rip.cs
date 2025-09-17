@@ -12,14 +12,6 @@ namespace DivineDragon
         Folder
     }
 
-    internal class FileScanResult
-    {
-        public int NewFilesCount { get; set; }
-        public int SkippedFilesCount { get; set; }
-        public List<string> NewFilesList { get; set; } = new List<string>();
-        public List<string> SkippedFilesList { get; set; } = new List<string>();
-    }
-
     public class Rip
     {
         public static bool RunAssetRipper(string assetRipperPath, string inputPath, string outputPath, InputMode mode, bool forceImport = false)
@@ -70,71 +62,21 @@ namespace DivineDragon
 
                 string projectAssetsPath = Application.dataPath;
 
-                var quickReport = new GuidSyncReport();
+                var combinedResult = CopyAndCollect(sourceAssetsPath, projectAssetsPath, forceImport);
 
-                // First pass: scan files to determine what needs to be copied and what needs GUID sync
-                var scanResult = ScanDirectorySelective(sourceAssetsPath, projectAssetsPath, false);
-
-                foreach (var file in scanResult.NewFilesList)
-                {
-                    quickReport.AddNewFile(file);
-                }
-
-                // Convert skipped files to Unity project paths
-                foreach (var skippedFile in scanResult.SkippedFilesList)
-                {
-                    string targetPath = skippedFile.Replace(sourceAssetsPath, projectAssetsPath);
-                    string relativePath = targetPath.Replace(Application.dataPath, "Assets");
-                    relativePath = relativePath.Replace('\\', '/');
-                    quickReport.AddSkippedFile(relativePath);
-                }
-
-                GuidSyncReport syncReport = null;
-
-                if (scanResult.SkippedFilesCount > 0)
-                {
-                    Debug.Log($"Found {scanResult.SkippedFilesCount} existing files - synchronizing GUIDs...");
-                    syncReport = SynchronizeGuids(projectAssetsPath, sourceAssetsPath);
-
-                    if (syncReport != null)
-                    {
-                        foreach (var file in scanResult.NewFilesList)
-                        {
-                            syncReport.AddNewFile(file);
-                        }
-
-                        foreach (var skippedFile in quickReport.SkippedFiles)
-                        {
-                            syncReport.AddSkippedFile(skippedFile);
-                        }
-
-                        syncReport.FinalizeReport();
-                    }
-                }
-                else
-                {
-                    Debug.Log("All files are new - skipping GUID synchronization");
-                    syncReport = quickReport;
-                    syncReport.FinalizeReport();
-                }
-
+                var syncReport = combinedResult.SyncReport;
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
                     EditorApplication.delayCall += () => GuidSyncReportWindow.ShowReport(syncReport);
                 }
 
-                // Second pass: actually copy the files
-                var copyResult = CopyDirectorySelective(sourceAssetsPath, projectAssetsPath, forceImport);
-
-                Debug.Log($"Assets merged into project: {copyResult.NewFilesCount} new files imported, {copyResult.SkippedFilesCount} existing files skipped");
-                if (forceImport && copyResult.SkippedFilesCount > 0)
+                Debug.Log($"Assets merged into project: {combinedResult.NewFiles} new files imported, {combinedResult.SkippedFiles} existing files skipped");
+                if (forceImport && combinedResult.SkippedFiles > 0)
                 {
                     Debug.Log("Force import enabled - all files were overwritten");
                 }
 
-                // Refresh the AssetDatabase to show the new files in Unity
                 AssetDatabase.Refresh();
-
                 return true;
             }
             catch (System.Exception ex)
@@ -158,92 +100,88 @@ namespace DivineDragon
             }
         }
 
-        private static void CopyDirectory(string sourceDir, string targetDir)
+        private class CopyResult
         {
-            // Create all directories
+            public int NewFiles;
+            public int SkippedFiles;
+            public GuidSyncReport SyncReport;
+        }
+
+        private static CopyResult CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
+        {
+            var result = new CopyResult();
+            var syncReport = new GuidSyncReport();
+
             foreach (string dirPath in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
             {
                 Directory.CreateDirectory(dirPath.Replace(sourceDir, targetDir));
             }
 
-            // Copy all files
             foreach (string filePath in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
             {
-                string targetFilePath = filePath.Replace(sourceDir, targetDir);
-                File.Copy(filePath, targetFilePath, true);
-            }
-        }
-
-        private static FileScanResult ScanDirectorySelective(string sourceDir, string targetDir, bool forceImport)
-        {
-            var result = new FileScanResult();
-
-            // Scan files to see what needs to be copied
-            foreach (string filePath in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
-            {
-                string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
+                string targetFilePath = filePath.Replace(sourceDir, targetDir);
+                string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
 
-                // Check if file already exists
-                if (File.Exists(targetFilePath) && !forceImport)
+                bool targetExists = File.Exists(targetFilePath);
+                bool shouldOverwrite = forceImport && targetExists;
+                bool shouldCopy = !targetExists || shouldOverwrite;
+
+                if (shouldCopy)
                 {
-                    // Only count non-meta files for statistics (Unity treats asset + meta as one unit)
-                    if (!isMetaFile)
-                    {
-                        result.SkippedFilesCount++;
-                        result.SkippedFilesList.Add(filePath);
-                    }
-                    continue;
+                    File.Copy(filePath, targetFilePath, true);
                 }
 
                 if (!isMetaFile)
                 {
-                    result.NewFilesCount++;
-                    string relativePath = targetFilePath.Replace(Application.dataPath, "Assets");
-                    relativePath = relativePath.Replace('\\', '/');
-                    result.NewFilesList.Add(relativePath);
-                }
-            }
-
-            return result;
-        }
-
-        private static FileScanResult CopyDirectorySelective(string sourceDir, string targetDir, bool forceImport)
-        {
-            var result = new FileScanResult();
-
-            // Create all directories
-            foreach (string dirPath in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
-            {
-                Directory.CreateDirectory(dirPath.Replace(sourceDir, targetDir));
-            }
-
-            // Copy files
-            foreach (string filePath in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
-            {
-                string targetFilePath = filePath.Replace(sourceDir, targetDir);
-                bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
-
-                // Check if file already exists
-                if (File.Exists(targetFilePath) && !forceImport)
-                {
-                    // Only count non-meta files for statistics (Unity treats asset + meta as one unit)
-                    if (!isMetaFile)
+                    if (!targetExists)
                     {
-                        result.SkippedFilesCount++;
-                        result.SkippedFilesList.Add(filePath);
+                        result.NewFiles++;
+                        syncReport.AddNewFile(unityRelativeTarget);
                     }
-                    continue; // Skip existing files unless force import is enabled
-                }
-
-                File.Copy(filePath, targetFilePath, true);
-
-                if (!isMetaFile)
-                {
-                    result.NewFilesCount++;
+                    else
+                    {
+                        result.SkippedFiles++;
+                        syncReport.AddSkippedFile(unityRelativeTarget);
+                    }
                 }
             }
 
+            GuidSyncReport fullReport = syncReport;
+
+            if (result.SkippedFiles > 0 && !forceImport)
+            {
+                Debug.Log($"Found {result.SkippedFiles} existing files - synchronizing GUIDs...");
+                fullReport = SynchronizeGuids(targetDir, sourceDir) ?? new GuidSyncReport();
+
+                foreach (var file in syncReport.NewFilesImported)
+                {
+                    fullReport.AddNewFile(file);
+                }
+
+                foreach (var skipped in syncReport.SkippedFiles)
+                {
+                    fullReport.AddSkippedFile(skipped);
+                }
+
+                fullReport.FinalizeReport();
+            }
+            else
+            {
+                if (result.SkippedFiles == 0)
+                {
+                    Debug.Log("All files are new - skipping GUID synchronization");
+                }
+                else if (forceImport)
+                {
+                    Debug.Log("Force import enabled - skipping GUID synchronization for overwritten files");
+                }
+
+                syncReport.FinalizeReport();
+                fullReport = syncReport;
+            }
+
+            result.SyncReport = fullReport;
             return result;
         }
 

@@ -6,6 +6,7 @@ using UnityEngine;
 // Type aliases for clarity
 using Guid = System.String;
 using FilePath = System.String;
+using FileID = System.Int64;
 
 namespace DivineDragon
 {
@@ -17,6 +18,9 @@ namespace DivineDragon
 
         // Regex to match and preserve GUID line formatting - some meta files have quotes, some don't
         private static readonly Regex GuidReplaceRegex = new Regex(@"^(guid:\s*)(['""]?)([a-f0-9]{32})(['""]?)\s*$", RegexOptions.Multiline);
+
+        // Regex to match the main object FileID line in meta files (if present)
+        private static readonly Regex MainObjectFileIdRegex = new Regex(@"^\s*mainObjectFileID:\s*(-?\d+)\s*$", RegexOptions.Multiline);
 
         /// Extracts the GUID from a Unity .meta file
         public static bool TryGetGuid(FilePath metaFilePath, out Guid guid)
@@ -91,6 +95,47 @@ namespace DivineDragon
             catch (Exception ex)
             {
                 Debug.LogError($"Failed to update meta file {metaFilePath}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// Extracts GUID and, when available, the main object's FileID from a Unity .meta file
+        public static bool TryGetGuidAndMainFileId(FilePath metaFilePath, out Guid guid, out FileID? mainFileId)
+        {
+            guid = null;
+            mainFileId = null;
+
+            try
+            {
+                if (!File.Exists(metaFilePath))
+                {
+                    Debug.LogWarning($"Meta file not found: {metaFilePath}");
+                    return false;
+                }
+
+                string content = File.ReadAllText(metaFilePath);
+
+                // Extract GUID
+                Match guidMatch = GuidRegex.Match(content);
+                if (!guidMatch.Success || guidMatch.Groups.Count <= 1)
+                {
+                    Debug.LogWarning($"No GUID found in meta file: {metaFilePath}");
+                    return false;
+                }
+                guid = guidMatch.Groups[1].Value;
+
+                // Extract main object FileID if present. Not all meta files contain this value (e.g., folders, scripts).
+                Match fileIdMatch = MainObjectFileIdRegex.Match(content);
+                if (fileIdMatch.Success && fileIdMatch.Groups.Count > 1 && long.TryParse(fileIdMatch.Groups[1].Value, out var parsedFileId))
+                {
+                    mainFileId = parsedFileId;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Failed to read meta file {metaFilePath}: {ex.Message}");
                 return false;
             }
         }

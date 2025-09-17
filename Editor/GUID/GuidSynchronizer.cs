@@ -11,6 +11,7 @@ using Guid = System.String;
 using FilePath = System.String;
 using RelativePath = System.String;
 using DirectoryPath = System.String;
+using FileID = System.Int64;
 
 namespace DivineDragon
 {
@@ -27,23 +28,30 @@ namespace DivineDragon
         private static readonly Regex SimpleGuidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
 
         // Matches: {fileID: 123456789, guid: 0123456789abcdef0123456789abcdef, type: 3}
-        // Captures the GUID (group 1)
-        private static readonly Regex FileIdGuidRegex = new Regex(@"\{fileID:\s*\d+,\s*guid:\s*([a-f0-9]{32}),\s*type:\s*\d+\}", RegexOptions.Compiled);
-
-        // More would need to be added if other formats are discovered
+        // Captures: FileID (group 1), GUID (group 2), Type (group 3)
+        private static readonly Regex FileIdGuidRegex = new Regex(@"\{fileID:\s*(-?\d+),\s*guid:\s*([a-f0-9]{32}),\s*type:\s*(\d+)\}", RegexOptions.Compiled);
 
         private class GuidMapping
         {
             public RelativePath RelativePath { get; set; }
             public Guid MainGuid { get; set; }
             public Guid SubordinateGuid { get; set; }
+            public FileID? MainMainObjectFileId { get; set; }
+            public FileID? SubordinateMainObjectFileId { get; set; }
+            public Dictionary<FileID, FileID> FileIdMappings { get; } = new Dictionary<FileID, FileID>();
         }
 
         public GuidSynchronizer(DirectoryPath mainProjectPath, DirectoryPath subordinateProjectPath)
         {
-            _mainProjectPath = mainProjectPath;
-            _subordinateProjectPath = subordinateProjectPath;
+            _mainProjectPath = NormalizeAssetsPath(mainProjectPath);
+            _subordinateProjectPath = NormalizeAssetsPath(subordinateProjectPath);
             _guidMappings = new Dictionary<RelativePath, GuidMapping>();
+        }
+
+        private class UpdateResult
+        {
+            public Dictionary<FilePath, HashSet<Guid>> FileUpdates { get; } = new Dictionary<FilePath, HashSet<Guid>>();
+            public Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> FileIdUpdates { get; } = new Dictionary<FilePath, List<(Guid, FileID, FileID)>>();
         }
 
         public GuidSyncReport Synchronize()
@@ -65,10 +73,10 @@ namespace DivineDragon
                 Debug.Log($"Found {_guidMappings.Count} GUID differences to synchronize");
 
                 // Do the actual work
-                var fileUpdates = UpdateReferences();
+                var updateResult = UpdateReferences();
 
                 // Build the report from the results
-                var report = BuildReport(fileUpdates);
+                var report = BuildReport(updateResult);
                 report.FinalizeReport();
 
                 if (report.Mappings.Count > 0)
@@ -85,7 +93,7 @@ namespace DivineDragon
             }
         }
 
-        private GuidSyncReport BuildReport(Dictionary<FilePath, HashSet<Guid>> fileUpdates)
+        private GuidSyncReport BuildReport(UpdateResult updateResult)
         {
             var report = new GuidSyncReport();
 
@@ -96,7 +104,7 @@ namespace DivineDragon
             }
 
             // Add file update references
-            foreach (var kvp in fileUpdates)
+            foreach (var kvp in updateResult.FileUpdates)
             {
                 foreach (var guid in kvp.Value)
                 {
@@ -104,7 +112,39 @@ namespace DivineDragon
                 }
             }
 
+            // Add fileID remapping info
+            foreach (var kvp in updateResult.FileIdUpdates)
+            {
+                var unityPath = ConvertToUnityPathForReport(kvp.Key);
+                var seen = new HashSet<(Guid guid, FileID oldFileId, FileID newFileId)>();
+
+                foreach (var remap in kvp.Value)
+                {
+                    if (seen.Add((remap.guid, remap.oldFileId, remap.newFileId)))
+                    {
+                        report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
+                    }
+                }
+            }
+
             return report;
+        }
+
+        private static string ConvertToUnityPathForReport(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath))
+            {
+                return filePath;
+            }
+
+            int assetsIndex = filePath.IndexOf("Assets", StringComparison.OrdinalIgnoreCase);
+            if (assetsIndex >= 0)
+            {
+                string relativePath = filePath.Substring(assetsIndex);
+                return relativePath.Replace('\\', '/');
+            }
+
+            return filePath.Replace('\\', '/');
         }
 
         private void ScanProjects()
@@ -117,34 +157,62 @@ namespace DivineDragon
             foreach (var kvp in mainMetaFiles)
             {
                 var relativePath = kvp.Key;
-                var mainGuid = kvp.Value;
+                var (mainGuid, mainMainFileId) = kvp.Value;
 
-                if (subordinateMetaFiles.TryGetValue(relativePath, out var subGuid))
+                if (subordinateMetaFiles.TryGetValue(relativePath, out var subData))
                 {
+                    var (subGuid, subMainFileId) = subData;
                     if (mainGuid != subGuid)
                     {
-                        _guidMappings[relativePath] = new GuidMapping
+                        var mapping = new GuidMapping
                         {
                             RelativePath = relativePath,
                             MainGuid = mainGuid,
-                            SubordinateGuid = subGuid
+                            SubordinateGuid = subGuid,
+                            MainMainObjectFileId = mainMainFileId,
+                            SubordinateMainObjectFileId = subMainFileId
                         };
+
+                        PopulateFileIdMappings(mapping, _mainProjectPath, _subordinateProjectPath);
+
+                        _guidMappings[relativePath] = mapping;
+
+                        var fileIdMessage = (subMainFileId.HasValue || mainMainFileId.HasValue)
+                            ? $", main object FileID: {subMainFileId?.ToString() ?? "n/a"} -> {mainMainFileId?.ToString() ?? "n/a"}"
+                            : string.Empty;
+
                         // Pretty much guaranteed to be different since they are from different projects, but
                         // just in case we import from the same export or something...
-                        Debug.Log($"GUID difference found for {relativePath}: {subGuid} -> {mainGuid}");
+                        Debug.Log($"GUID difference found for {relativePath}: {subGuid} -> {mainGuid}{fileIdMessage}");
                     }
                 }
             }
         }
 
-        private Dictionary<RelativePath, Guid> ScanMetaFiles(DirectoryPath projectPath)
+        private static DirectoryPath NormalizeAssetsPath(DirectoryPath projectPath)
         {
-            var metaFiles = new Dictionary<RelativePath, Guid>();
+            if (string.IsNullOrEmpty(projectPath))
+            {
+                return projectPath;
+            }
+
+            var trimmed = projectPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (trimmed.EndsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed;
+            }
+
+            return Path.Combine(trimmed, "Assets");
+        }
+
+        private Dictionary<RelativePath, (Guid guid, FileID? fileId)> ScanMetaFiles(DirectoryPath projectPath)
+        {
+            var metaFiles = new Dictionary<RelativePath, (Guid, FileID?)>();
 
             // We only care about the Assets folder - that's where all the actual content that needs syncing lives
             // projectPath should already be pointing to the Assets folder, but guarding
             string assetsPath = projectPath;
-            if (!projectPath.EndsWith("Assets"))
+            if (!projectPath.EndsWith("Assets", StringComparison.OrdinalIgnoreCase))
             {
                 assetsPath = Path.Combine(projectPath, "Assets");
             }
@@ -157,14 +225,73 @@ namespace DivineDragon
 
             foreach (var filePath in Directory.GetFiles(assetsPath, "*.meta", SearchOption.AllDirectories))
             {
-                if (MetaFileParser.TryGetGuid(filePath, out var guid))
+                if (MetaFileParser.TryGetGuidAndMainFileId(filePath, out var guid, out var fileId))
                 {
                     var relativePath = GetRelativePath(assetsPath, filePath);
-                    metaFiles[relativePath] = guid;
+                    metaFiles[relativePath] = (guid, fileId);
                 }
             }
 
             return metaFiles;
+        }
+
+        private void PopulateFileIdMappings(GuidMapping mapping, DirectoryPath mainAssetsRoot, DirectoryPath subordinateAssetsRoot)
+        {
+            if (mapping == null)
+            {
+                return;
+            }
+
+            if (mapping.SubordinateMainObjectFileId.HasValue && mapping.MainMainObjectFileId.HasValue)
+            {
+                mapping.FileIdMappings[mapping.SubordinateMainObjectFileId.Value] = mapping.MainMainObjectFileId.Value;
+            }
+
+            var assetRelativePath = RemoveMetaExtension(mapping.RelativePath);
+            if (string.IsNullOrEmpty(assetRelativePath))
+            {
+                return;
+            }
+
+            var mainAssetPath = Path.Combine(mainAssetsRoot, assetRelativePath);
+            var subordinateAssetPath = Path.Combine(subordinateAssetsRoot, assetRelativePath);
+
+            if (!File.Exists(mainAssetPath) || !File.Exists(subordinateAssetPath))
+            {
+                return;
+            }
+
+            if (!UnityFileUtils.IsUnityYamlFile(mainAssetPath) || !UnityFileUtils.IsUnityYamlFile(subordinateAssetPath))
+            {
+                return;
+            }
+
+            var mainFileIds = FileIdParser.ExtractFileIdDefinitions(mainAssetPath);
+            var subordinateFileIds = FileIdParser.ExtractFileIdDefinitions(subordinateAssetPath);
+
+            if (mainFileIds.Count == 0 || subordinateFileIds.Count == 0)
+            {
+                return;
+            }
+
+            var perAssetMapping = FileIdParser.CreateFileIdMapping(subordinateFileIds, mainFileIds);
+            foreach (var kvp in perAssetMapping)
+            {
+                mapping.FileIdMappings[kvp.Key] = kvp.Value;
+            }
+        }
+
+        private static RelativePath RemoveMetaExtension(RelativePath relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                return relativePath;
+            }
+
+            const string metaExtension = ".meta";
+            return relativePath.EndsWith(metaExtension, StringComparison.OrdinalIgnoreCase)
+                ? relativePath.Substring(0, relativePath.Length - metaExtension.Length)
+                : relativePath;
         }
         private RelativePath GetRelativePath(DirectoryPath basePath, FilePath fullPath)
         {
@@ -176,7 +303,7 @@ namespace DivineDragon
             return Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
         }
 
-        private Dictionary<FilePath, HashSet<Guid>> UpdateReferences()
+        private UpdateResult UpdateReferences()
         {
             Debug.Log($"Updating GUID references in Unity files in: {_subordinateProjectPath}");
 
@@ -186,53 +313,114 @@ namespace DivineDragon
                 m => m.MainGuid
             );
 
+            // Create FileID mappings per GUID
+            var fileIdMappings = new Dictionary<Guid, Dictionary<FileID, FileID>>();
+            foreach (var mapping in _guidMappings.Values)
+            {
+                if (mapping.FileIdMappings.Count == 0)
+                    continue;
+
+                if (!fileIdMappings.TryGetValue(mapping.SubordinateGuid, out var perGuidMapping))
+                {
+                    perGuidMapping = new Dictionary<FileID, FileID>();
+                    fileIdMappings[mapping.SubordinateGuid] = perGuidMapping;
+                }
+
+                foreach (var kvp in mapping.FileIdMappings)
+                {
+                    perGuidMapping[kvp.Key] = kvp.Value;
+                }
+            }
+
             // Track which files had which GUIDs updated
             var fileUpdates = new Dictionary<FilePath, HashSet<Guid>>();
+            var fileIdUpdates = new Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>>();
 
             foreach (var filePath in Directory.GetFiles(_subordinateProjectPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath))
                     continue;
 
-                if (!IsUnityYamlFile(filePath))
+                if (!UnityFileUtils.IsUnityYamlFile(filePath))
                     continue;
 
-                var replacedGuids = UpdateFileReferences(filePath, guidRemapping);
+                var replacedGuids = UpdateFileReferences(filePath, guidRemapping, fileIdMappings, fileIdUpdates);
                 if (replacedGuids.Count > 0)
                 {
                     fileUpdates[filePath] = replacedGuids;
                 }
             }
 
-            return fileUpdates;
+            var result = new UpdateResult();
+            foreach (var kvp in fileUpdates)
+            {
+                result.FileUpdates[kvp.Key] = kvp.Value;
+            }
+
+            foreach (var kvp in fileIdUpdates)
+            {
+                result.FileIdUpdates[kvp.Key] = kvp.Value;
+            }
+
+            return result;
         }
 
-        /// Checks if a file is a Unity YAML file by examining its header
-        private static bool IsUnityYamlFile(string filePath)
-        {
-            try
-            {
-                using (var reader = new StreamReader(filePath))
-                {
-                    var firstLine = reader.ReadLine();
-                    return firstLine != null && (firstLine.StartsWith("%YAML") || firstLine.StartsWith("---"));
-                }
-            }
-            catch
-            {
-                return false;
-            }
-        }
 
         /// Updates GUID references in a single file
         /// Returns the set of GUIDs that were replaced in the file
-        private static HashSet<Guid> UpdateFileReferences(FilePath filePath, Dictionary<Guid, Guid> guidMappings)
+        private static HashSet<Guid> UpdateFileReferences(
+            FilePath filePath,
+            Dictionary<Guid, Guid> guidMappings,
+            Dictionary<Guid, Dictionary<FileID, FileID>> fileIdMappings,
+            Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> fileIdUpdates)
         {
             var replacedGuids = new HashSet<Guid>();
 
             try
             {
                 string content = File.ReadAllText(filePath);
+
+                // For non-meta YAML assets, update compound fileID/guid references first so we operate on the original GUID values
+                if (!MetaFileParser.IsMetaFile(filePath))
+                {
+                    content = FileIdGuidRegex.Replace(content, match =>
+                    {
+                        var oldFileId = long.Parse(match.Groups[1].Value);
+                        var oldGuid = match.Groups[2].Value;
+                        var typeId = match.Groups[3].Value;
+
+                        if (guidMappings.TryGetValue(oldGuid, out var newGuid))
+                        {
+                            replacedGuids.Add(oldGuid);
+
+                            // Check if we have a FileID mapping for this GUID
+                            var finalFileId = oldFileId;
+                            if (fileIdMappings != null && fileIdMappings.TryGetValue(oldGuid, out var fileIdMap))
+                            {
+                                if (fileIdMap.TryGetValue(oldFileId, out var mappedFileId))
+                                {
+                                    finalFileId = mappedFileId;
+                                }
+                            }
+
+                            // Build the replacement string with updated GUID and FileID
+                            if (finalFileId != oldFileId)
+                            {
+                                fileIdUpdates ??= new Dictionary<FilePath, List<(Guid, FileID, FileID)>>();
+                                if (!fileIdUpdates.TryGetValue(filePath, out var updates))
+                                {
+                                    updates = new List<(Guid, FileID, FileID)>();
+                                    fileIdUpdates[filePath] = updates;
+                                }
+
+                                updates.Add((oldGuid, oldFileId, finalFileId));
+                            }
+
+                            return $"{{fileID: {finalFileId}, guid: {newGuid}, type: {typeId}}}";
+                        }
+                        return match.Value;
+                    });
+                }
 
                 // Always check for simple GUID pattern (used in meta files and some asset files)
                 content = SimpleGuidRegex.Replace(content, match =>
@@ -245,21 +433,6 @@ namespace DivineDragon
                     }
                     return match.Value;
                 });
-
-                // Only check for complex pattern in non-meta files
-                if (!MetaFileParser.IsMetaFile(filePath))
-                {
-                    content = FileIdGuidRegex.Replace(content, match =>
-                    {
-                        var oldGuid = match.Groups[1].Value;
-                        if (guidMappings.TryGetValue(oldGuid, out var newGuid))
-                        {
-                            replacedGuids.Add(oldGuid);
-                            return match.Value.Replace(oldGuid, newGuid);
-                        }
-                        return match.Value;
-                    });
-                }
 
                 if (replacedGuids.Count > 0)
                 {
