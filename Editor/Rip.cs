@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -119,9 +121,48 @@ namespace DivineDragon
             var existingShaderNames = ShaderUtils.GetExistingShaderNames();
             var skippedDuplicateShaders = new List<string>();
 
+            // Build assembly registry and identify folders to skip
+            var existingAssemblyNames = AssemblyUtils.GetExistingAssemblyNames();
+            var skipFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var skippedAssemblyInfo = new List<(string assemblyName, string folderPath)>();
+
+            // Find all .asmdef files and check for duplicates or invalid assemblies
+            var stubToRealGuidMappings = new List<ScriptUtils.ScriptMapping>();
+
+            foreach (var filePath in allFiles)
+            {
+                if (AssemblyUtils.IsAssemblyDefinitionFile(filePath))
+                {
+                    string assemblyName = AssemblyUtils.ExtractAssemblyName(filePath);
+
+                    // Skip invalid assemblies (null or empty names)
+                    if (string.IsNullOrEmpty(assemblyName))
+                    {
+                        string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
+                        skipFolders.Add(assemblyFolder);
+                        skippedAssemblyInfo.Add(("Invalid/Empty Assembly", assemblyFolder));
+                    }
+                    // Skip duplicate assemblies
+                    else if (existingAssemblyNames.Contains(assemblyName))
+                    {
+                        string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
+
+                        // Create GUID mappings for stub scripts to real scripts
+                        var mappings = ScriptUtils.CreateStubToRealGuidMappings(assemblyFolder, assemblyName);
+                        stubToRealGuidMappings.AddRange(mappings);
+
+                        skipFolders.Add(assemblyFolder);
+                        skippedAssemblyInfo.Add((assemblyName, assemblyFolder));
+                    }
+                }
+            }
+
+            var createdDirectories = new HashSet<string>();
             foreach (var dirPath in allDirectories)
             {
-                Directory.CreateDirectory(dirPath.Replace(sourceDir, targetDir));
+                string targetDirPath = dirPath.Replace(sourceDir, targetDir);
+                Directory.CreateDirectory(targetDirPath);
+                createdDirectories.Add(targetDirPath);
             }
 
             var newFiles = new List<string>();
@@ -130,6 +171,19 @@ namespace DivineDragon
 
             foreach (var filePath in allFiles)
             {
+                // Skip files in assembly folders that are being skipped
+                bool inSkipFolder = false;
+                foreach (var skipFolder in skipFolders)
+                {
+                    if (AssemblyUtils.IsPathInFolder(filePath, skipFolder))
+                    {
+                        inSkipFolder = true;
+                        break;
+                    }
+                }
+                if (inSkipFolder)
+                    continue;
+
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
                 string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
@@ -138,11 +192,15 @@ namespace DivineDragon
                 if (ShaderUtils.IsShaderFile(filePath) && !isMetaFile)
                 {
                     string shaderName = ShaderUtils.ExtractShaderName(filePath);
-                    if (!string.IsNullOrEmpty(shaderName) && existingShaderNames.Contains(shaderName))
+                    if (!string.IsNullOrEmpty(shaderName))
                     {
-                        Debug.Log($"Skipping duplicate shader: {Path.GetFileName(filePath)} (shader name: {shaderName})");
-                        skippedDuplicateShaders.Add(unityRelativeTarget);
-                        continue; // Skip this shader and its meta file
+                        if (existingShaderNames.Contains(shaderName))
+                        {
+                            skippedDuplicateShaders.Add(unityRelativeTarget);
+                            continue; // Skip this shader and its meta file
+                        }
+
+                        existingShaderNames.Add(shaderName);
                     }
                 }
 
@@ -195,6 +253,21 @@ namespace DivineDragon
                 initialReport.AddDuplicateShader(path);
             }
 
+            // Add duplicate assemblies to report
+            foreach (var (assemblyName, folderPath) in skippedAssemblyInfo)
+            {
+                string unityRelativePath = folderPath.Replace(sourceDir, "").TrimStart('/', '\\');
+                initialReport.AddDuplicateAssembly(assemblyName, unityRelativePath);
+            }
+
+            // Add stub to real GUID mappings
+            foreach (var mapping in stubToRealGuidMappings)
+            {
+                // Add as a GUID mapping for the report to handle
+                string relativePath = mapping.StubPath.Replace(sourceDir, "").TrimStart('/', '\\');
+                initialReport.AddGuidMapping(relativePath, mapping.StubGuid, mapping.RealGuid);
+            }
+
             GuidSyncReport fullReport;
             if (result.SkippedFiles > 0)
             {
@@ -214,6 +287,18 @@ namespace DivineDragon
                 foreach (var path in skippedDuplicateShaders)
                 {
                     fullReport.AddDuplicateShader(path);
+                }
+
+                foreach (var (assemblyName, folderPath) in skippedAssemblyInfo)
+                {
+                    string unityRelativePath = folderPath.Replace(sourceDir, "").TrimStart('/', '\\');
+                    fullReport.AddDuplicateAssembly(assemblyName, unityRelativePath);
+                }
+
+                foreach (var mapping in stubToRealGuidMappings)
+                {
+                    string relativePath = mapping.StubPath.Replace(sourceDir, "").TrimStart('/', '\\');
+                    fullReport.AddGuidMapping(relativePath, mapping.StubGuid, mapping.RealGuid);
                 }
 
                 fullReport.FinalizeReport();
@@ -236,9 +321,12 @@ namespace DivineDragon
                 File.Copy(filePath, targetFilePath, true);
             }
 
-            if (skippedDuplicateShaders.Count > 0)
+            CleanupEmptyDirectories(createdDirectories);
+
+            // Apply stub to real GUID mappings to imported files
+            if (stubToRealGuidMappings.Count > 0)
             {
-                Debug.Log($"Skipped {skippedDuplicateShaders.Count} duplicate shaders");
+                ApplyGuidRemappings(targetDir, stubToRealGuidMappings);
             }
 
             result.SyncReport = fullReport;
@@ -254,6 +342,72 @@ namespace DivineDragon
                 return fullPath.Substring(basePath.Length);
 
             return Path.GetFileName(fullPath);
+        }
+
+        private static void ApplyGuidRemappings(string targetDir, List<ScriptUtils.ScriptMapping> mappings)
+        {
+            if (mappings.Count == 0)
+                return;
+
+            // Build a dictionary for quick lookup
+            var guidMap = new Dictionary<string, string>();
+            foreach (var mapping in mappings)
+            {
+                guidMap[mapping.StubGuid] = mapping.RealGuid;
+            }
+
+            // Find all files that might have references (prefabs, scenes, assets)
+            var filesToUpdate = new List<string>();
+            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.prefab", SearchOption.AllDirectories));
+            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.unity", SearchOption.AllDirectories));
+            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.asset", SearchOption.AllDirectories));
+
+            var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
+
+            foreach (var file in filesToUpdate)
+            {
+                bool modified = false;
+                string content = File.ReadAllText(file);
+                string newContent = guidRegex.Replace(content, match =>
+                {
+                    string oldGuid = match.Groups[1].Value;
+                    if (guidMap.TryGetValue(oldGuid, out string newGuid))
+                    {
+                        modified = true;
+                        Debug.Log($"Remapping GUID in {Path.GetFileName(file)}: {oldGuid} -> {newGuid}");
+                        return $"guid: {newGuid}";
+                    }
+                    return match.Value;
+                });
+
+                if (modified)
+                {
+                    File.WriteAllText(file, newContent);
+                }
+            }
+        }
+
+        private static void CleanupEmptyDirectories(HashSet<string> createdDirectories)
+        {
+            var sortedDirs = createdDirectories.OrderByDescending(d => d.Length).ToList();
+
+            foreach (var dir in sortedDirs)
+            {
+                if (Directory.Exists(dir))
+                {
+                    if (!Directory.GetFiles(dir).Any() && !Directory.GetDirectories(dir).Any())
+                    {
+                        try
+                        {
+                            Directory.Delete(dir);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"Failed to delete empty directory {dir}: {ex.Message}");
+                        }
+                    }
+                }
+            }
         }
     }
 }

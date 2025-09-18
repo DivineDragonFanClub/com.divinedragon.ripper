@@ -17,6 +17,13 @@ namespace DivineDragon
     /// It contains lists of new files, skipped files, and GUID mappings between main and subordinate projects
     /// Perhaps poorly named since it also is needed for our actual GUID mapping and dependency updating logic
     [Serializable]
+    public class AssemblySkipInfo
+    {
+        public string AssemblyName { get; set; }
+        public string FolderPath { get; set; }
+    }
+
+    [Serializable]
     public class GuidSyncReport
     {
         public List<FilePath> NewFilesImported { get; private set; }
@@ -24,6 +31,8 @@ namespace DivineDragon
         public List<FilePath> SkippedFiles { get; private set; }
 
         public List<FilePath> DuplicateShaders { get; private set; }
+
+        public List<AssemblySkipInfo> DuplicateAssemblies { get; private set; }
 
         public List<GuidMapping> Mappings { get; private set; }
 
@@ -42,6 +51,7 @@ namespace DivineDragon
             NewFilesImported = new List<FilePath>();
             SkippedFiles = new List<FilePath>();
             DuplicateShaders = new List<FilePath>();
+            DuplicateAssemblies = new List<AssemblySkipInfo>();
             Mappings = new List<GuidMapping>();
             FileIdRemappings = new List<FileIdRemapping>();
             _fileDependencyMappings = new List<FileDependencyMapping>();
@@ -152,6 +162,18 @@ namespace DivineDragon
             }
         }
 
+        public void AddDuplicateAssembly(string assemblyName, string folderPath)
+        {
+            if (!DuplicateAssemblies.Any(a => a.AssemblyName == assemblyName))
+            {
+                DuplicateAssemblies.Add(new AssemblySkipInfo
+                {
+                    AssemblyName = assemblyName,
+                    FolderPath = folderPath
+                });
+            }
+        }
+
         public void AddFileIdRemapping(Guid fileGuid, FilePath filePath, FileID oldFileId, FileID newFileId)
         {
             var key = $"{fileGuid}|{filePath}|{oldFileId}|{newFileId}";
@@ -186,6 +208,10 @@ namespace DivineDragon
             if (DuplicateShaders.Count > 0)
             {
                 sb.AppendLine($"Duplicate Shaders Skipped: {DuplicateShaders.Count}");
+            }
+            if (DuplicateAssemblies.Count > 0)
+            {
+                sb.AppendLine($"Duplicate Assemblies Skipped: {DuplicateAssemblies.Count}");
             }
             sb.AppendLine($"UUID Mappings: {Mappings.Count}");
             sb.AppendLine($"FileID Remappings: {FileIdRemappings.Count}");

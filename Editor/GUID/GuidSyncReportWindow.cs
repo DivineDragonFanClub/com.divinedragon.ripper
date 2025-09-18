@@ -161,6 +161,12 @@ namespace DivineDragon
                 var duplicateShadersSection = CreateDuplicateShadersSection();
                 _scrollView.Add(duplicateShadersSection);
             }
+
+            if (_report.DuplicateAssemblies != null && _report.DuplicateAssemblies.Count > 0)
+            {
+                var duplicateAssembliesSection = CreateDuplicateAssembliesSection();
+                _scrollView.Add(duplicateAssembliesSection);
+            }
         }
 
         private VisualElement CreateSection(string title, List<string> items)
@@ -595,6 +601,53 @@ namespace DivineDragon
                 }
 
                 fileListContainer.Add(fileContainer);
+            }
+
+            section.Add(fileListContainer);
+            return section;
+        }
+
+        private VisualElement CreateDuplicateAssembliesSection()
+        {
+            var section = new VisualElement();
+            section.style.marginBottom = 20;
+            section.style.marginTop = 10;
+
+            var titleLabel = new Label($"Duplicate Assemblies Skipped ({_report.DuplicateAssemblies.Count})");
+            titleLabel.style.fontSize = 14;
+            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            titleLabel.style.marginBottom = 8;
+            titleLabel.style.color = new Color(1f, 0.6f, 0.3f); // Orange color for visibility
+            section.Add(titleLabel);
+
+            var fileListContainer = new ScrollView(ScrollViewMode.Vertical);
+            fileListContainer.style.maxHeight = 200;
+            fileListContainer.style.backgroundColor = new Color(0.35f, 0.2f, 0.1f, 0.15f);
+            fileListContainer.style.paddingTop = 10;
+            fileListContainer.style.paddingBottom = 10;
+            fileListContainer.style.paddingLeft = 10;
+            fileListContainer.style.paddingRight = 10;
+            fileListContainer.style.borderTopLeftRadius = 5;
+            fileListContainer.style.borderTopRightRadius = 5;
+            fileListContainer.style.borderBottomLeftRadius = 5;
+            fileListContainer.style.borderBottomRightRadius = 5;
+
+            foreach (var assemblyInfo in _report.DuplicateAssemblies.OrderBy(a => a.AssemblyName))
+            {
+                var assemblyContainer = new VisualElement();
+                assemblyContainer.style.marginBottom = 5;
+
+                var assemblyLabel = new Label($"Assembly: {assemblyInfo.AssemblyName}");
+                assemblyLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+                assemblyLabel.style.marginBottom = 2;
+                assemblyContainer.Add(assemblyLabel);
+
+                var folderLabel = new Label($"  Folder: {assemblyInfo.FolderPath}");
+                folderLabel.style.opacity = 0.8f;
+                folderLabel.style.marginLeft = 10;
+                assemblyContainer.Add(folderLabel);
+
+                fileListContainer.Add(assemblyContainer);
             }
 
             section.Add(fileListContainer);

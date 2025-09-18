@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
+using UnityEditor;
 using UnityEngine;
 
 namespace DivineDragon
@@ -11,11 +13,18 @@ namespace DivineDragon
 
         public static HashSet<string> GetExistingShaderNames()
         {
-            var shaderNames = new HashSet<string>();
+            var shaderNames = new HashSet<string>(StringComparer.Ordinal);
 
-            Shader[] allShaders = Resources.FindObjectsOfTypeAll<Shader>();
-            foreach (var shader in allShaders)
+            var shaderGuids = AssetDatabase.FindAssets("t:Shader");
+            foreach (var guid in shaderGuids)
             {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path))
+                {
+                    continue;
+                }
+
+                var shader = AssetDatabase.LoadAssetAtPath<Shader>(path);
                 if (shader != null && !string.IsNullOrEmpty(shader.name))
                 {
                     shaderNames.Add(shader.name);
