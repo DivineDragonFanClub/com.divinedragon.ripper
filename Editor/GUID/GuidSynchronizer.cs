@@ -56,21 +56,16 @@ namespace DivineDragon
 
         public GuidSyncReport Synchronize()
         {
-            Debug.Log("Starting GUID synchronization...");
-
             try
             {
                 ScanProjects();
 
                 if (_guidMappings.Count == 0)
                 {
-                    Debug.Log("No GUID differences found. Assets are already synchronized.");
                     var emptyReport = new GuidSyncReport();
                     emptyReport.FinalizeReport();
                     return emptyReport;
                 }
-
-                Debug.Log($"Found {_guidMappings.Count} GUID differences to synchronize");
 
                 // Do the actual work
                 var updateResult = UpdateReferences();
@@ -78,11 +73,6 @@ namespace DivineDragon
                 // Build the report from the results
                 var report = BuildReport(updateResult);
                 report.FinalizeReport();
-
-                if (report.Mappings.Count > 0)
-                {
-                    Debug.Log($"GUID Sync Complete: {report.Mappings.Count} UUID mappings updated");
-                }
 
                 return report;
             }
@@ -120,21 +110,21 @@ namespace DivineDragon
             foreach (var kvp in updateResult.FileIdUpdates)
             {
                 var unityPath = ConvertToUnityPathForReport(kvp.Key);
-                var seen = new HashSet<(Guid guid, FileID oldFileId, FileID newFileId)>();
 
-                foreach (var remap in kvp.Value)
+                var grouped = kvp.Value
+                    .GroupBy(r => (r.guid, r.oldFileId, r.newFileId))
+                    .Select(g => g.Key);
+
+                foreach (var remap in grouped)
                 {
-                    if (seen.Add((remap.guid, remap.oldFileId, remap.newFileId)))
+                    if (mappingBySubGuid.TryGetValue(remap.guid, out var guidMapping))
                     {
-                        if (mappingBySubGuid.TryGetValue(remap.guid, out var guidMapping))
-                        {
-                            var mappingPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
-                            report.AddFileIdRemapping(remap.guid, mappingPath, remap.oldFileId, remap.newFileId);
-                        }
-                        else
-                        {
-                            report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
-                        }
+                        var mappingPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
+                        report.AddFileIdRemapping(remap.guid, mappingPath, remap.oldFileId, remap.newFileId);
+                    }
+                    else
+                    {
+                        report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
                     }
                 }
             }
@@ -182,8 +172,6 @@ namespace DivineDragon
 
         private void ScanProjects()
         {
-            Debug.Log("Scanning projects for GUID mappings...");
-
             var mainMetaFiles = ScanMetaFiles(_mainProjectPath);
             var subordinateMetaFiles = ScanMetaFiles(_subordinateProjectPath);
 
@@ -209,14 +197,6 @@ namespace DivineDragon
                         PopulateFileIdMappings(mapping, _mainProjectPath, _subordinateProjectPath);
 
                         _guidMappings[relativePath] = mapping;
-
-                        var fileIdMessage = (subMainFileId.HasValue || mainMainFileId.HasValue)
-                            ? $", main object FileID: {subMainFileId?.ToString() ?? "n/a"} -> {mainMainFileId?.ToString() ?? "n/a"}"
-                            : string.Empty;
-
-                        // Pretty much guaranteed to be different since they are from different projects, but
-                        // just in case we import from the same export or something...
-                        Debug.Log($"GUID difference found for {relativePath}: {subGuid} -> {mainGuid}{fileIdMessage}");
                     }
                 }
             }
@@ -338,8 +318,6 @@ namespace DivineDragon
 
         private UpdateResult UpdateReferences()
         {
-            Debug.Log($"Updating GUID references in Unity files in: {_subordinateProjectPath}");
-
             // Create mapping from old GUIDs to new GUIDs
             var guidRemapping = _guidMappings.Values.ToDictionary<GuidMapping, Guid, Guid>(
                 m => m.SubordinateGuid,
@@ -446,7 +424,10 @@ namespace DivineDragon
                                     fileIdUpdates[filePath] = updates;
                                 }
 
-                                updates.Add((oldGuid, oldFileId, finalFileId));
+                                if (!updates.Exists(t => t.guid == oldGuid && t.oldFileId == oldFileId && t.newFileId == finalFileId))
+                                {
+                                    updates.Add((oldGuid, oldFileId, finalFileId));
+                                }
                             }
 
                             return $"{{fileID: {finalFileId}, guid: {newGuid}, type: {typeId}}}";
@@ -470,7 +451,6 @@ namespace DivineDragon
                 if (replacedGuids.Count > 0)
                 {
                     File.WriteAllText(filePath, content);
-                    Debug.Log($"Updated GUID references in: {filePath}");
                 }
             }
             catch (Exception ex)

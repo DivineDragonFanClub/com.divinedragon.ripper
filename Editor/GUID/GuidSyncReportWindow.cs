@@ -21,10 +21,6 @@ namespace DivineDragon
             {
                 Debug.LogWarning("ShowReport called with null report");
             }
-            else
-            {
-                Debug.Log($"ShowReport called with: {report.NewFilesImported?.Count ?? 0} new files, {report.Mappings?.Count ?? 0} existing references");
-            }
 
             var window = GetWindow<GuidSyncReportWindow>("GUID Sync Report");
             window._report = report;
@@ -105,6 +101,9 @@ namespace DivineDragon
 
             root.Add(summaryContainer);
 
+            var exportButtons = CreateExportButtons();
+            root.Add(exportButtons);
+
             _scrollView = new ScrollView();
             _scrollView.style.flexGrow = 1;
             root.Add(_scrollView);
@@ -156,9 +155,6 @@ namespace DivineDragon
                 var skippedFilesSection = CreateSkippedFilesSection();
                 _scrollView.Add(skippedFilesSection);
             }
-
-            var exportSection = CreateExportSection();
-            _scrollView.Add(exportSection);
         }
 
         private VisualElement CreateSection(string title, List<string> items)
@@ -282,9 +278,7 @@ namespace DivineDragon
                 var displayPath = ConvertToUnityAssetPath(mapping.AssetPath.Replace(".meta", ""));
                 var lookupKey = NormalizePath(displayPath);
 
-                var container = BuildRemapContainer(displayPath);
-
-            container.Add(BuildGuidRow(mapping.OldGuid, mapping.NewGuid));
+                var container = BuildRemapContainer(displayPath, mapping);
 
                 if (fileIdLookup.TryGetValue(lookupKey, out var remapsForFile))
                 {
@@ -316,7 +310,7 @@ namespace DivineDragon
             return section;
         }
 
-        private VisualElement BuildRemapContainer(string displayPath)
+        private VisualElement BuildRemapContainer(string displayPath, GuidMapping mapping = null)
         {
             var container = new VisualElement();
             container.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.3f);
@@ -359,6 +353,36 @@ namespace DivineDragon
             });
 
             container.Add(fileButton);
+
+            if (mapping != null)
+            {
+                var guidRow = new VisualElement();
+                guidRow.style.flexDirection = FlexDirection.Row;
+                guidRow.style.alignItems = Align.Center;
+                guidRow.style.marginLeft = 10;
+                guidRow.style.marginBottom = 4;
+
+                var guidLabel = new Label("GUID:");
+                guidLabel.style.fontSize = 9;
+                guidLabel.style.marginRight = 6;
+                guidRow.Add(guidLabel);
+
+                var oldGuidButton = CreateGuidButton(mapping.OldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
+                oldGuidButton.style.fontSize = 9;
+                guidRow.Add(oldGuidButton);
+
+                var arrowLabel = new Label(" → ");
+                arrowLabel.style.fontSize = 9;
+                arrowLabel.style.marginLeft = 6;
+                arrowLabel.style.marginRight = 6;
+                guidRow.Add(arrowLabel);
+
+                var newGuidButton = CreateGuidButton(mapping.NewGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
+                newGuidButton.style.fontSize = 9;
+                guidRow.Add(newGuidButton);
+
+                container.Add(guidRow);
+            }
             return container;
         }
 
@@ -401,36 +425,6 @@ namespace DivineDragon
 
             var withoutMeta = rawPath.Replace(".meta", string.Empty);
             return withoutMeta.Replace('\\', '/');
-        }
-
-        private VisualElement BuildGuidRow(string oldGuid, string newGuid)
-        {
-            var row = new VisualElement();
-            row.style.flexDirection = FlexDirection.Row;
-            row.style.alignItems = Align.Center;
-            row.style.marginLeft = 10;
-            row.style.marginTop = 4;
-
-            var label = new Label("GUID:");
-            label.style.fontSize = 9;
-            label.style.marginRight = 6;
-            row.Add(label);
-
-            var oldGuidButton = CreateGuidButton(oldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
-            oldGuidButton.style.fontSize = 9;
-            row.Add(oldGuidButton);
-
-            var arrowLabel = new Label(" → ");
-            arrowLabel.style.fontSize = 9;
-            arrowLabel.style.marginLeft = 6;
-            arrowLabel.style.marginRight = 6;
-            row.Add(arrowLabel);
-
-            var newGuidButton = CreateGuidButton(newGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
-            newGuidButton.style.fontSize = 9;
-            row.Add(newGuidButton);
-
-            return row;
         }
 
         private VisualElement CreateNewFilesSection(Dictionary<string, List<FileIdRemapping>> fileIdLookup)
@@ -554,7 +548,32 @@ namespace DivineDragon
                         depHeader.Add(depButton);
                         depColumn.Add(depHeader);
 
-                        depColumn.Add(BuildGuidRow(dep.OldGuid, dep.NewGuid));
+                        var guidRow = new VisualElement();
+                        guidRow.style.flexDirection = FlexDirection.Row;
+                        guidRow.style.alignItems = Align.Center;
+                        guidRow.style.marginLeft = 15;
+                        guidRow.style.marginTop = 2;
+
+                        var guidLabel = new Label("GUID:");
+                        guidLabel.style.fontSize = 9;
+                        guidLabel.style.marginRight = 6;
+                        guidRow.Add(guidLabel);
+
+                        var oldGuidButton = CreateGuidButton(dep.OldGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
+                        oldGuidButton.style.fontSize = 9;
+                        guidRow.Add(oldGuidButton);
+
+                        var guidArrow = new Label(" → ");
+                        guidArrow.style.fontSize = 9;
+                        guidArrow.style.marginLeft = 4;
+                        guidArrow.style.marginRight = 4;
+                        guidRow.Add(guidArrow);
+
+                        var newGuidButton = CreateGuidButton(dep.NewGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
+                        newGuidButton.style.fontSize = 9;
+                        guidRow.Add(newGuidButton);
+
+                        depColumn.Add(guidRow);
 
                         var depPathNormalized = NormalizePath(ConvertToUnityAssetPath(dep.DependencyPath.Replace(".meta", "")));
                         if (fileIdLookup.TryGetValue(depPathNormalized, out var depFileIds))
@@ -636,52 +655,38 @@ namespace DivineDragon
             return section;
         }
 
-        private VisualElement CreateExportSection()
+        private VisualElement CreateExportButtons()
         {
-            var section = new VisualElement();
-            section.style.marginTop = 20;
-            section.style.paddingTop = 10;
-            section.style.borderTopWidth = 1;
-            section.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f, 0.5f);
-
-            var titleLabel = new Label("Export Report");
-            titleLabel.style.fontSize = 14;
-            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            titleLabel.style.marginBottom = 5;
-            section.Add(titleLabel);
-
             var buttonContainer = new VisualElement();
             buttonContainer.style.flexDirection = FlexDirection.Row;
-            buttonContainer.style.marginTop = 5;
+            buttonContainer.style.marginBottom = 10;
 
             var jsonButton = new Button(() =>
             {
-                var json = _report.ToJson();
-                GUIUtility.systemCopyBuffer = json;
-                Debug.Log("Report exported to clipboard as JSON");
-                EditorUtility.DisplayDialog("Export Complete", "Report has been copied to clipboard as JSON.", "OK");
+                string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+                string defaultName = $"GuidSyncReport_{timestamp}.json";
+                string path = EditorUtility.SaveFilePanel(
+                    "Save GUID Sync Report",
+                    "",
+                    defaultName,
+                    "json"
+                );
+
+                if (!string.IsNullOrEmpty(path))
+                {
+                    var json = _report.ToJson();
+                    System.IO.File.WriteAllText(path, json);
+                    Debug.Log($"Report saved to: {path}");
+                    EditorUtility.RevealInFinder(path);
+                }
             })
             {
-                text = "Copy as JSON"
+                text = "Export Report to JSON"
             };
-            jsonButton.style.width = 120;
-            jsonButton.style.marginRight = 10;
+            jsonButton.style.width = 140;
             buttonContainer.Add(jsonButton);
 
-            var logButton = new Button(() =>
-            {
-                var json = _report.ToJson();
-                Debug.Log("GUID Sync Report (JSON):\n" + json);
-                EditorUtility.DisplayDialog("Export Complete", "Report has been logged to console as JSON.", "OK");
-            })
-            {
-                text = "Log to Console"
-            };
-            logButton.style.width = 120;
-            buttonContainer.Add(logButton);
-
-            section.Add(buttonContainer);
-            return section;
+            return buttonContainer;
         }
 
 
@@ -690,7 +695,6 @@ namespace DivineDragon
             var button = new Button(() =>
             {
                 GUIUtility.systemCopyBuffer = guid;
-                Debug.Log($"Copied GUID to clipboard: {guid}");
             })
             {
                 text = label ?? guid
@@ -708,15 +712,14 @@ namespace DivineDragon
             return button;
         }
 
-        private Button CreateCopyButton(string text, Color? backgroundColor = null)
+        private Button CreateCopyButton(string value, Color? backgroundColor = null)
         {
             var button = new Button(() =>
             {
-                GUIUtility.systemCopyBuffer = text;
-                Debug.Log($"Copied value to clipboard: {text}");
+                GUIUtility.systemCopyBuffer = value;
             })
             {
-                text = text
+                text = value
             };
 
             button.style.fontSize = 9;
@@ -764,7 +767,6 @@ namespace DivineDragon
 
                 EditorUtility.FocusProjectWindow();
 
-                Debug.Log($"Selected asset: {assetPath}");
             }
             else
             {

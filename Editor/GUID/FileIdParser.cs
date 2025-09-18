@@ -18,14 +18,6 @@ namespace DivineDragon
         // Captures the FileID (group 1)
         private static readonly Regex YamlFileIdDefinitionRegex = new Regex(@"^--- !u!\d+ &(-?\d+)", RegexOptions.Multiline | RegexOptions.Compiled);
 
-        // Matches internal FileID references: {fileID: 123456}
-        // Captures the FileID (group 1)
-        private static readonly Regex InternalFileIdRegex = new Regex(@"\{fileID:\s*(-?\d+)\}", RegexOptions.Compiled);
-
-        // Matches external FileID references: {fileID: 123456, guid: abc..., type: 3}
-        // Captures: FileID (group 1), GUID (group 2), Type (group 3)
-        private static readonly Regex ExternalFileIdRegex = new Regex(@"\{fileID:\s*(-?\d+),\s*guid:\s*([a-f0-9]{32}),\s*type:\s*(\d+)\}", RegexOptions.Compiled);
-
         /// Extracts all FileID definitions from a Unity YAML file
         public static List<FileID> ExtractFileIdDefinitions(FilePath filePath)
         {
@@ -54,7 +46,6 @@ namespace DivineDragon
                     }
                 }
 
-                Debug.Log($"Extracted {fileIds.Count} FileID definitions from {Path.GetFileName(filePath)}");
             }
             catch (Exception ex)
             {

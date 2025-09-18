@@ -31,6 +31,7 @@ namespace DivineDragon
         private List<FileDependencyMapping> _fileDependencyMappings;
 
         private readonly Dictionary<Guid, GuidMapping> _byOldGuid = new Dictionary<Guid, GuidMapping>();
+        private readonly HashSet<string> _fileIdRemapKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public string SummaryText { get; private set; }
 
@@ -102,7 +103,8 @@ namespace DivineDragon
                         DependencyName = mapping.AssetName,
                         DependencyPath = mapping.AssetPath,
                         OldGuid = mapping.OldGuid,
-                        NewGuid = mapping.NewGuid
+                        NewGuid = mapping.NewGuid,
+                        FileIdRemappings = new List<FileIdRemapping>()
                     });
                 }
             }
@@ -141,17 +143,32 @@ namespace DivineDragon
 
         public void AddFileIdRemapping(Guid fileGuid, FilePath filePath, FileID oldFileId, FileID newFileId)
         {
-            FileIdRemappings.Add(new FileIdRemapping
+            var key = $"{fileGuid}|{filePath}|{oldFileId}|{newFileId}";
+            if (_fileIdRemapKeys.Add(key))
             {
-                FileGuid = fileGuid,
-                FilePath = filePath,
-                OldFileId = oldFileId,
-                NewFileId = newFileId
-            });
+                FileIdRemappings.Add(new FileIdRemapping
+                {
+                    FileGuid = fileGuid,
+                    FilePath = filePath,
+                    OldFileId = oldFileId,
+                    NewFileId = newFileId
+                });
+            }
         }
 
         public void FinalizeReport()
         {
+            // Associate FileID remappings with their corresponding dependencies
+            foreach (var fileMapping in _fileDependencyMappings)
+            {
+                foreach (var dep in fileMapping.Dependencies)
+                {
+                    // Find FileID remappings for this dependency's GUID
+                    var relatedRemappings = FileIdRemappings.Where(r => r.FileGuid == dep.OldGuid).ToList();
+                    dep.FileIdRemappings.AddRange(relatedRemappings);
+                }
+            }
+
             var sb = new StringBuilder();
             sb.AppendLine($"New Files Imported: {NewFilesImported.Count}");
             sb.AppendLine($"Files Skipped: {SkippedFiles.Count}");
@@ -163,116 +180,297 @@ namespace DivineDragon
 
         public string ToJson()
         {
-            string NormalizePath(string path)
+            string EscapeString(string value)
             {
-                if (string.IsNullOrEmpty(path))
-                    return path;
-                return path.Replace(".meta", string.Empty).Replace('\\', '/');
-            }
-
-            JsonFileIdRemap[] MapFileIdsForPath(string path)
-            {
-                var normalized = NormalizePath(path);
-                return FileIdRemappings
-                    .Where(r => NormalizePath(r.FilePath) == normalized)
-                    .Select(r => new JsonFileIdRemap
-                    {
-                        filePath = NormalizePath(r.FilePath),
-                        guid = r.FileGuid,
-                        oldFileId = r.OldFileId,
-                        newFileId = r.NewFileId
-                    })
-                    .ToArray();
-            }
-
-            var newFilesWithDeps = new List<JsonFileWithDependencies>();
-            foreach (var file in NewFilesImported)
-            {
-                var fileWithDeps = new JsonFileWithDependencies
+                if (value == null)
                 {
-                    filePath = file,
-                    dependencies = new List<JsonDependencyMapping>(),
-                    fileIdRemappings = MapFileIdsForPath(file)
-                };
+                    return "null";
+                }
 
-                if (FileDependencyUpdates.TryGetValue(file, out var deps))
+                var sb = new StringBuilder(value.Length + 4);
+                sb.Append('"');
+
+                foreach (var ch in value)
                 {
-                    foreach (var dep in deps)
+                    switch (ch)
                     {
-                        fileWithDeps.dependencies.Add(new JsonDependencyMapping
-                        {
-                            dependencyName = dep.DependencyName,
-                            dependencyPath = dep.DependencyPath.Replace(".meta", ""),
-                            oldGuid = dep.OldGuid,
-                            newGuid = dep.NewGuid,
-                            fileIdRemappings = MapFileIdsForPath(dep.DependencyPath)
-                        });
+                        case '"':
+                            sb.Append("\\\"");
+                            break;
+                        case '\\':
+                            sb.Append("\\\\");
+                            break;
+                        case '\n':
+                            sb.Append("\\n");
+                            break;
+                        case '\r':
+                            sb.Append("\\r");
+                            break;
+                        case '\t':
+                            sb.Append("\\t");
+                            break;
+                        default:
+                            if (ch < 0x20)
+                            {
+                                sb.AppendFormat("\\u{0:X4}", (int)ch);
+                            }
+                            else
+                            {
+                                sb.Append(ch);
+                            }
+                            break;
                     }
                 }
 
-                newFilesWithDeps.Add(fileWithDeps);
+                sb.Append('"');
+                return sb.ToString();
             }
 
-            var jsonObject = new JsonReport
+            string NormalizePath(string path)
             {
-                newFiles = newFilesWithDeps.ToArray(),
-                skippedFiles = SkippedFiles.ToArray(),
-                uuidMappings = Mappings.Select(m => new JsonGuidMapping
+                if (string.IsNullOrEmpty(path))
                 {
-                    assetPath = m.AssetPath.Replace(".meta", ""),
-                    assetName = m.AssetName,
-                    oldGuid = m.OldGuid,
-                    newGuid = m.NewGuid,
-                    fileIdRemappings = MapFileIdsForPath(m.AssetPath)
-                }).ToArray()
-            };
+                    return path;
+                }
 
-            return JsonUtility.ToJson(jsonObject, true);
-        }
+                return path.Replace(".meta", string.Empty).Replace('\\', '/');
+            }
 
-        [Serializable]
-        private class JsonReport
-        {
-            public JsonFileWithDependencies[] newFiles;
-            public string[] skippedFiles;
-            public JsonGuidMapping[] uuidMappings;
-        }
+            List<(long oldId, long newId)> CollectFileIdRemapsForPath(string path)
+            {
+                var normalized = NormalizePath(path);
+                var results = new List<(long, long)>();
 
-        [Serializable]
-        private class JsonFileWithDependencies
-        {
-            public string filePath;
-            public List<JsonDependencyMapping> dependencies;
-            public JsonFileIdRemap[] fileIdRemappings;
-        }
+                var seen = new HashSet<string>();
+                foreach (var remap in FileIdRemappings)
+                {
+                    if (NormalizePath(remap.FilePath) != normalized)
+                    {
+                        continue;
+                    }
 
-        [Serializable]
-        private class JsonDependencyMapping
-        {
-            public string dependencyName;
-            public string dependencyPath;
-            public string oldGuid;
-            public string newGuid;
-            public JsonFileIdRemap[] fileIdRemappings;
-        }
+                    var key = $"{remap.OldFileId}|{remap.NewFileId}";
+                    if (seen.Add(key))
+                    {
+                        results.Add((remap.OldFileId, remap.NewFileId));
+                    }
+                }
 
-        [Serializable]
-        private class JsonGuidMapping
-        {
-            public string assetPath;
-            public string assetName;
-            public string oldGuid;
-            public string newGuid;
-            public JsonFileIdRemap[] fileIdRemappings;
-        }
+                return results;
+            }
 
-        [Serializable]
-        private class JsonFileIdRemap
-        {
-            public string filePath;
-            public string guid;
-            public long oldFileId;
-            public long newFileId;
+            List<(long oldId, long newId)> CollectFileIdRemaps(IEnumerable<FileIdRemapping> remaps)
+            {
+                var results = new List<(long, long)>();
+                if (remaps == null)
+                {
+                    return results;
+                }
+
+                var seen = new HashSet<string>();
+                foreach (var remap in remaps)
+                {
+                    var key = $"{remap.OldFileId}|{remap.NewFileId}";
+                    if (seen.Add(key))
+                    {
+                        results.Add((remap.OldFileId, remap.NewFileId));
+                    }
+                }
+
+                return results;
+            }
+
+            void AppendIndent(StringBuilder builder, int indent)
+            {
+                builder.Append(' ', indent * 2);
+            }
+
+            void AppendFileIdRemapObject(StringBuilder builder, List<(long oldId, long newId)> remaps, int indent)
+            {
+                if (remaps == null || remaps.Count == 0)
+                {
+                    builder.Append("null");
+                    return;
+                }
+
+                builder.Append("{\n");
+                for (int i = 0; i < remaps.Count; i++)
+                {
+                    var (oldId, newId) = remaps[i];
+                    AppendIndent(builder, indent + 1);
+                    builder.Append('"');
+                    builder.Append(oldId);
+                    builder.Append("\": ");
+                    builder.Append(newId);
+                    if (i < remaps.Count - 1)
+                    {
+                        builder.Append(',');
+                    }
+                    builder.Append('\n');
+                }
+                AppendIndent(builder, indent);
+                builder.Append('}');
+            }
+
+            void AppendStringArray(StringBuilder builder, IReadOnlyList<string> values, int indent)
+            {
+                if (values == null || values.Count == 0)
+                {
+                    builder.Append("[]");
+                    return;
+                }
+
+                builder.Append("[\n");
+                for (int i = 0; i < values.Count; i++)
+                {
+                    AppendIndent(builder, indent + 1);
+                    builder.Append(EscapeString(values[i] ?? string.Empty));
+                    if (i < values.Count - 1)
+                    {
+                        builder.Append(',');
+                    }
+                    builder.Append('\n');
+                }
+                AppendIndent(builder, indent);
+                builder.Append(']');
+            }
+
+            var dependencyUpdates = FileDependencyUpdates;
+            var builder = new StringBuilder();
+            builder.Append("{\n");
+
+            AppendIndent(builder, 1);
+            builder.Append("\"newFiles\": [\n");
+            for (int i = 0; i < NewFilesImported.Count; i++)
+            {
+                var file = NewFilesImported[i];
+                AppendIndent(builder, 2);
+                builder.Append("{\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"filePath\": ");
+                builder.Append(EscapeString(file));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"dependencies\": ");
+                if (dependencyUpdates.TryGetValue(file, out var deps) && deps != null && deps.Count > 0)
+                {
+                    builder.Append("[\n");
+                    for (int j = 0; j < deps.Count; j++)
+                    {
+                        var dep = deps[j];
+                        AppendIndent(builder, 4);
+                        builder.Append("{\n");
+
+                        AppendIndent(builder, 5);
+                        builder.Append("\"dependencyName\": ");
+                        builder.Append(EscapeString(dep.DependencyName));
+                        builder.Append(",\n");
+
+                        AppendIndent(builder, 5);
+                        builder.Append("\"dependencyPath\": ");
+                        builder.Append(EscapeString(dep.DependencyPath?.Replace(".meta", string.Empty)));
+                        builder.Append(",\n");
+
+                        AppendIndent(builder, 5);
+                        builder.Append("\"oldGuid\": ");
+                        builder.Append(EscapeString(dep.OldGuid));
+                        builder.Append(",\n");
+
+                        AppendIndent(builder, 5);
+                        builder.Append("\"newGuid\": ");
+                        builder.Append(EscapeString(dep.NewGuid));
+                        builder.Append(",\n");
+
+                        AppendIndent(builder, 5);
+                        builder.Append("\"fileIdRemappings\": ");
+                        AppendFileIdRemapObject(builder, CollectFileIdRemaps(dep.FileIdRemappings), 5);
+                        builder.Append('\n');
+
+                        AppendIndent(builder, 4);
+                        builder.Append('}');
+                        if (j < deps.Count - 1)
+                        {
+                            builder.Append(',');
+                        }
+                        builder.Append('\n');
+                    }
+                    AppendIndent(builder, 3);
+                    builder.Append("],\n");
+                }
+                else
+                {
+                    builder.Append("[],\n");
+                }
+
+                AppendIndent(builder, 3);
+                builder.Append("\"fileIdRemappings\": ");
+                AppendFileIdRemapObject(builder, CollectFileIdRemapsForPath(file), 3);
+                builder.Append('\n');
+
+                AppendIndent(builder, 2);
+                builder.Append('}');
+                if (i < NewFilesImported.Count - 1)
+                {
+                    builder.Append(',');
+                }
+                builder.Append('\n');
+            }
+            AppendIndent(builder, 1);
+            builder.Append("],\n");
+
+            AppendIndent(builder, 1);
+            builder.Append("\"skippedFiles\": ");
+            AppendStringArray(builder, SkippedFiles, 1);
+            builder.Append(",\n");
+
+            AppendIndent(builder, 1);
+            builder.Append("\"uuidMappings\": [\n");
+            for (int i = 0; i < Mappings.Count; i++)
+            {
+                var mapping = Mappings[i];
+                AppendIndent(builder, 2);
+                builder.Append("{\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"assetPath\": ");
+                builder.Append(EscapeString(mapping.AssetPath?.Replace(".meta", string.Empty)));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"assetName\": ");
+                builder.Append(EscapeString(mapping.AssetName));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"oldGuid\": ");
+                builder.Append(EscapeString(mapping.OldGuid));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"newGuid\": ");
+                builder.Append(EscapeString(mapping.NewGuid));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"fileIdRemappings\": ");
+                AppendFileIdRemapObject(builder, CollectFileIdRemapsForPath(mapping.AssetPath), 3);
+                builder.Append('\n');
+
+                AppendIndent(builder, 2);
+                builder.Append('}');
+                if (i < Mappings.Count - 1)
+                {
+                    builder.Append(',');
+                }
+                builder.Append('\n');
+            }
+            AppendIndent(builder, 1);
+            builder.Append("]\n");
+
+            builder.Append('}');
+            return builder.ToString();
         }
     }
 
@@ -292,6 +490,7 @@ namespace DivineDragon
         public AssetPath DependencyPath { get; set; }
         public Guid OldGuid { get; set; }
         public Guid NewGuid { get; set; }
+        public List<FileIdRemapping> FileIdRemappings { get; set; } = new List<FileIdRemapping>();
     }
 
     [Serializable]
