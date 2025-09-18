@@ -115,6 +115,10 @@ namespace DivineDragon
             var allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
             var allFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
 
+            // Build shader registry for deduplication
+            var existingShaderNames = ShaderUtils.GetExistingShaderNames();
+            var skippedDuplicateShaders = new List<string>();
+
             foreach (var dirPath in allDirectories)
             {
                 Directory.CreateDirectory(dirPath.Replace(sourceDir, targetDir));
@@ -122,12 +126,39 @@ namespace DivineDragon
 
             var newFiles = new List<string>();
             var skippedFiles = new List<string>();
+            var filesToCopy = new List<string>();
 
             foreach (var filePath in allFiles)
             {
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
                 string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
+
+                // Check for duplicate shaders by name
+                if (ShaderUtils.IsShaderFile(filePath) && !isMetaFile)
+                {
+                    string shaderName = ShaderUtils.ExtractShaderName(filePath);
+                    if (!string.IsNullOrEmpty(shaderName) && existingShaderNames.Contains(shaderName))
+                    {
+                        Debug.Log($"Skipping duplicate shader: {Path.GetFileName(filePath)} (shader name: {shaderName})");
+                        skippedDuplicateShaders.Add(unityRelativeTarget);
+                        continue; // Skip this shader and its meta file
+                    }
+                }
+
+                // Skip meta files for shaders we're not copying
+                if (isMetaFile)
+                {
+                    string baseFile = filePath.Substring(0, filePath.Length - 5); // Remove .meta
+                    if (ShaderUtils.IsShaderFile(baseFile))
+                    {
+                        string shaderName = ShaderUtils.ExtractShaderName(baseFile);
+                        if (!string.IsNullOrEmpty(shaderName) && existingShaderNames.Contains(shaderName))
+                        {
+                            continue; // Skip meta file for duplicate shader
+                        }
+                    }
+                }
 
                 bool targetExists = File.Exists(targetFilePath);
 
@@ -144,6 +175,8 @@ namespace DivineDragon
                         skippedFiles.Add(unityRelativeTarget);
                     }
                 }
+
+                filesToCopy.Add(filePath);
             }
 
             foreach (var path in newFiles)
@@ -154,6 +187,12 @@ namespace DivineDragon
             foreach (var path in skippedFiles)
             {
                 initialReport.AddSkippedFile(path);
+            }
+
+            // Add duplicate shaders to report
+            foreach (var path in skippedDuplicateShaders)
+            {
+                initialReport.AddDuplicateShader(path);
             }
 
             GuidSyncReport fullReport;
@@ -172,6 +211,11 @@ namespace DivineDragon
                     fullReport.AddSkippedFile(path);
                 }
 
+                foreach (var path in skippedDuplicateShaders)
+                {
+                    fullReport.AddDuplicateShader(path);
+                }
+
                 fullReport.FinalizeReport();
             }
             else
@@ -181,7 +225,8 @@ namespace DivineDragon
                 fullReport = initialReport;
             }
 
-            foreach (var filePath in allFiles)
+            // Only copy files that aren't duplicate shaders
+            foreach (var filePath in filesToCopy)
             {
                 string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 bool targetExists = File.Exists(targetFilePath);
@@ -189,6 +234,11 @@ namespace DivineDragon
                     continue;
 
                 File.Copy(filePath, targetFilePath, true);
+            }
+
+            if (skippedDuplicateShaders.Count > 0)
+            {
+                Debug.Log($"Skipped {skippedDuplicateShaders.Count} duplicate shaders");
             }
 
             result.SyncReport = fullReport;

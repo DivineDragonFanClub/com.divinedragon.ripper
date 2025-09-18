@@ -23,6 +23,8 @@ namespace DivineDragon
 
         public List<FilePath> SkippedFiles { get; private set; }
 
+        public List<FilePath> DuplicateShaders { get; private set; }
+
         public List<GuidMapping> Mappings { get; private set; }
 
         public List<FileIdRemapping> FileIdRemappings { get; private set; }
@@ -39,6 +41,7 @@ namespace DivineDragon
         {
             NewFilesImported = new List<FilePath>();
             SkippedFiles = new List<FilePath>();
+            DuplicateShaders = new List<FilePath>();
             Mappings = new List<GuidMapping>();
             FileIdRemappings = new List<FileIdRemapping>();
             _fileDependencyMappings = new List<FileDependencyMapping>();
@@ -141,6 +144,14 @@ namespace DivineDragon
             }
         }
 
+        public void AddDuplicateShader(FilePath filePath)
+        {
+            if (!DuplicateShaders.Contains(filePath))
+            {
+                DuplicateShaders.Add(filePath);
+            }
+        }
+
         public void AddFileIdRemapping(Guid fileGuid, FilePath filePath, FileID oldFileId, FileID newFileId)
         {
             var key = $"{fileGuid}|{filePath}|{oldFileId}|{newFileId}";
@@ -172,6 +183,10 @@ namespace DivineDragon
             var sb = new StringBuilder();
             sb.AppendLine($"New Files Imported: {NewFilesImported.Count}");
             sb.AppendLine($"Files Skipped: {SkippedFiles.Count}");
+            if (DuplicateShaders.Count > 0)
+            {
+                sb.AppendLine($"Duplicate Shaders Skipped: {DuplicateShaders.Count}");
+            }
             sb.AppendLine($"UUID Mappings: {Mappings.Count}");
             sb.AppendLine($"FileID Remappings: {FileIdRemappings.Count}");
 

@@ -155,6 +155,12 @@ namespace DivineDragon
                 var skippedFilesSection = CreateSkippedFilesSection();
                 _scrollView.Add(skippedFilesSection);
             }
+
+            if (_report.DuplicateShaders != null && _report.DuplicateShaders.Count > 0)
+            {
+                var duplicateShadersSection = CreateDuplicateShadersSection();
+                _scrollView.Add(duplicateShadersSection);
+            }
         }
 
         private VisualElement CreateSection(string title, List<string> items)
@@ -589,6 +595,57 @@ namespace DivineDragon
                 }
 
                 fileListContainer.Add(fileContainer);
+            }
+
+            section.Add(fileListContainer);
+            return section;
+        }
+
+        private VisualElement CreateDuplicateShadersSection()
+        {
+            var section = new VisualElement();
+            section.style.marginBottom = 20;
+            section.style.marginTop = 10;
+
+            var titleLabel = new Label($"Duplicate Shaders Skipped ({_report.DuplicateShaders.Count})");
+            titleLabel.style.fontSize = 14;
+            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            titleLabel.style.marginBottom = 8;
+            titleLabel.style.color = new Color(1f, 0.8f, 0.4f); // Yellow/orange color for visibility
+            section.Add(titleLabel);
+
+            var fileListContainer = new ScrollView(ScrollViewMode.Vertical);
+            fileListContainer.style.maxHeight = 200;
+            fileListContainer.style.backgroundColor = new Color(0.3f, 0.25f, 0.1f, 0.15f);
+            fileListContainer.style.paddingTop = 10;
+            fileListContainer.style.paddingBottom = 10;
+            fileListContainer.style.paddingLeft = 10;
+            fileListContainer.style.paddingRight = 10;
+            fileListContainer.style.borderTopLeftRadius = 5;
+            fileListContainer.style.borderTopRightRadius = 5;
+            fileListContainer.style.borderBottomLeftRadius = 5;
+            fileListContainer.style.borderBottomRightRadius = 5;
+
+            foreach (var file in _report.DuplicateShaders.OrderBy(f => f))
+            {
+                var fileButton = new Button(() =>
+                {
+                    SelectAssetInProject(file);
+                })
+                {
+                    text = file
+                };
+                fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+                fileButton.style.paddingLeft = 5;
+                fileButton.style.paddingTop = 2;
+                fileButton.style.paddingBottom = 2;
+                fileButton.style.marginBottom = 2;
+                fileButton.style.backgroundColor = new Color(0, 0, 0, 0);
+                fileButton.style.borderLeftWidth = 0;
+                fileButton.style.borderRightWidth = 0;
+                fileButton.style.borderTopWidth = 0;
+                fileButton.style.borderBottomWidth = 0;
+                fileListContainer.Add(fileButton);
             }
 
             section.Add(fileListContainer);
