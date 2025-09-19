@@ -318,13 +318,10 @@ namespace DivineDragon
                     string relativePath = mapping.StubPath.Replace(sourceDir, "").TrimStart('/', '\\');
                     fullReport.AddGuidMapping(relativePath, mapping.StubGuid, mapping.RealGuid);
                 }
-
-                fullReport.FinalizeReport();
             }
             else
             {
                 Debug.Log("All files are new - skipping GUID synchronization");
-                initialReport.FinalizeReport();
                 fullReport = initialReport;
             }
 
@@ -342,10 +339,24 @@ namespace DivineDragon
             CleanupEmptyDirectories(createdDirectories);
 
             // Apply stub to real GUID mappings to imported files
+            List<ScriptGuidRemapping> scriptRemapResults = new List<ScriptGuidRemapping>();
             if (stubToRealGuidMappings.Count > 0)
             {
-                ApplyGuidRemappings(targetDir, stubToRealGuidMappings);
+                scriptRemapResults = ApplyGuidRemappings(targetDir, sourceDir, stubToRealGuidMappings);
             }
+
+            foreach (var remap in scriptRemapResults)
+            {
+                fullReport.AddScriptGuidRemapping(
+                    remap.TargetAssetPath,
+                    remap.ScriptType,
+                    remap.StubGuid,
+                    remap.RealGuid,
+                    remap.StubScriptPath,
+                    remap.RealScriptPath);
+            }
+
+            fullReport.FinalizeReport();
 
             result.SyncReport = fullReport;
             return result;
@@ -362,16 +373,20 @@ namespace DivineDragon
             return Path.GetFileName(fullPath);
         }
 
-        private static void ApplyGuidRemappings(string targetDir, List<ScriptUtils.ScriptMapping> mappings)
+        private static List<ScriptGuidRemapping> ApplyGuidRemappings(string targetDir, string sourceDir, List<ScriptUtils.ScriptMapping> mappings)
         {
+            var remapResults = new List<ScriptGuidRemapping>();
             if (mappings.Count == 0)
-                return;
+                return remapResults;
 
             // Build a dictionary for quick lookup
-            var guidMap = new Dictionary<string, string>();
+            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>(StringComparer.OrdinalIgnoreCase);
             foreach (var mapping in mappings)
             {
-                guidMap[mapping.StubGuid] = mapping.RealGuid;
+                if (!string.IsNullOrEmpty(mapping.StubGuid))
+                {
+                    guidMap[mapping.StubGuid] = mapping;
+                }
             }
 
             // Find all files that might have references (prefabs, scenes, assets)
@@ -385,15 +400,34 @@ namespace DivineDragon
             foreach (var file in filesToUpdate)
             {
                 bool modified = false;
+                var recordedForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string content = File.ReadAllText(file);
                 string newContent = guidRegex.Replace(content, match =>
                 {
                     string oldGuid = match.Groups[1].Value;
-                    if (guidMap.TryGetValue(oldGuid, out string newGuid))
+                    if (guidMap.TryGetValue(oldGuid, out var mapping))
                     {
                         modified = true;
-                        Debug.Log($"Remapping GUID in {Path.GetFileName(file)}: {oldGuid} -> {newGuid}");
-                        return $"guid: {newGuid}";
+                        Debug.Log($"Remapping GUID in {Path.GetFileName(file)}: {oldGuid} -> {mapping.RealGuid}");
+
+                        var targetPath = ConvertAbsoluteToUnityPath(file, targetDir);
+                        var realScriptPath = ConvertAbsoluteToUnityPath(mapping.RealPath, Application.dataPath);
+                        var stubScriptPath = ConvertAbsoluteToUnityPath(mapping.StubPath, sourceDir);
+                        var recordKey = $"{targetPath}|{mapping.StubGuid}|{mapping.RealGuid}";
+                        if (recordedForFile.Add(recordKey))
+                        {
+                            remapResults.Add(new ScriptGuidRemapping
+                            {
+                                TargetAssetPath = targetPath,
+                                ScriptType = mapping.TypeName,
+                                StubGuid = mapping.StubGuid,
+                                RealGuid = mapping.RealGuid,
+                                StubScriptPath = stubScriptPath,
+                                RealScriptPath = realScriptPath
+                            });
+                        }
+
+                        return $"guid: {mapping.RealGuid}";
                     }
                     return match.Value;
                 });
@@ -403,6 +437,31 @@ namespace DivineDragon
                     File.WriteAllText(file, newContent);
                 }
             }
+
+            return remapResults;
+        }
+
+        private static string ConvertAbsoluteToUnityPath(string absolutePath, string assetsRoot)
+        {
+            if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(assetsRoot))
+            {
+                return absolutePath;
+            }
+
+            var normalizedPath = Path.GetFullPath(absolutePath).Replace('\\', '/');
+            var normalizedRoot = Path.GetFullPath(assetsRoot).Replace('\\', '/');
+
+            if (!normalizedRoot.EndsWith("/", StringComparison.Ordinal))
+            {
+                normalizedRoot += "/";
+            }
+
+            if (normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Assets/" + normalizedPath.Substring(normalizedRoot.Length);
+            }
+
+            return normalizedPath;
         }
 
         private static void CleanupEmptyDirectories(HashSet<string> createdDirectories)

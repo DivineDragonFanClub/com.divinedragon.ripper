@@ -119,6 +119,7 @@ namespace DivineDragon
             public Guid RealGuid { get; set; }
             public TypeName TypeName { get; set; }
             public FilePath StubPath { get; set; }
+            public FilePath RealPath { get; set; }
         }
 
         public static List<ScriptMapping> CreateStubToRealGuidMappings(
@@ -168,7 +169,8 @@ namespace DivineDragon
                             StubGuid = stubGuid,
                             RealGuid = realGuid,
                             TypeName = stubType.FullName,
-                            StubPath = stubScript
+                            StubPath = stubScript,
+                            RealPath = realScript
                         });
                         Debug.Log($"Mapped stub {stubType.FullName} ({stubGuid}) to real script ({realGuid})");
                     }

@@ -34,6 +34,8 @@ namespace DivineDragon
 
         public List<AssemblySkipInfo> DuplicateAssemblies { get; private set; }
 
+        public List<ScriptGuidRemapping> ScriptGuidRemappings { get; private set; }
+
         public List<GuidMapping> Mappings { get; private set; }
 
         public List<FileIdRemapping> FileIdRemappings { get; private set; }
@@ -43,6 +45,7 @@ namespace DivineDragon
 
         private readonly Dictionary<Guid, GuidMapping> _byOldGuid = new Dictionary<Guid, GuidMapping>();
         private readonly HashSet<string> _fileIdRemapKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _scriptRemapKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public string SummaryText { get; private set; }
 
@@ -52,6 +55,7 @@ namespace DivineDragon
             SkippedFiles = new List<FilePath>();
             DuplicateShaders = new List<FilePath>();
             DuplicateAssemblies = new List<AssemblySkipInfo>();
+            ScriptGuidRemappings = new List<ScriptGuidRemapping>();
             Mappings = new List<GuidMapping>();
             FileIdRemappings = new List<FileIdRemapping>();
             _fileDependencyMappings = new List<FileDependencyMapping>();
@@ -138,6 +142,29 @@ namespace DivineDragon
             return filePath;
         }
 
+        private string NormalizeUnityPath(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath))
+            {
+                return filePath;
+            }
+
+            var normalized = filePath.Replace('\\', '/');
+
+            int assetsIndex = normalized.IndexOf("Assets/", StringComparison.OrdinalIgnoreCase);
+            if (assetsIndex >= 0)
+            {
+                normalized = normalized.Substring(assetsIndex);
+            }
+
+            if (normalized.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(0, normalized.Length - ".meta".Length);
+            }
+
+            return normalized;
+        }
+
         public void AddNewFile(FilePath filePath)
         {
             if (!NewFilesImported.Contains(filePath))
@@ -170,6 +197,38 @@ namespace DivineDragon
                 {
                     AssemblyName = assemblyName,
                     FolderPath = folderPath
+                });
+            }
+        }
+
+        public void AddScriptGuidRemapping(
+            string assetPath,
+            string scriptType,
+            Guid stubGuid,
+            Guid realGuid,
+            string stubScriptPath = null,
+            string realScriptPath = null)
+        {
+            if (string.IsNullOrEmpty(assetPath) || string.IsNullOrEmpty(scriptType) || string.IsNullOrEmpty(stubGuid) || string.IsNullOrEmpty(realGuid))
+            {
+                return;
+            }
+
+            var normalizedAssetPath = NormalizeUnityPath(assetPath);
+            var normalizedStubPath = string.IsNullOrEmpty(stubScriptPath) ? null : NormalizeUnityPath(stubScriptPath);
+            var normalizedRealPath = string.IsNullOrEmpty(realScriptPath) ? null : NormalizeUnityPath(realScriptPath);
+
+            var key = $"{normalizedAssetPath}|{scriptType}|{stubGuid}|{realGuid}";
+            if (_scriptRemapKeys.Add(key))
+            {
+                ScriptGuidRemappings.Add(new ScriptGuidRemapping
+                {
+                    TargetAssetPath = normalizedAssetPath,
+                    ScriptType = scriptType,
+                    StubGuid = stubGuid,
+                    RealGuid = realGuid,
+                    StubScriptPath = normalizedStubPath,
+                    RealScriptPath = normalizedRealPath
                 });
             }
         }
@@ -213,6 +272,7 @@ namespace DivineDragon
             {
                 sb.AppendLine($"Duplicate Assemblies Skipped: {DuplicateAssemblies.Count}");
             }
+            sb.AppendLine($"Script Stub Remappings: {ScriptGuidRemappings.Count}");
             sb.AppendLine($"UUID Mappings: {Mappings.Count}");
             sb.AppendLine($"FileID Remappings: {FileIdRemappings.Count}");
 
@@ -510,6 +570,61 @@ namespace DivineDragon
             AppendIndent(builder, 1);
             builder.Append("]\n");
 
+            builder.Append(",\n");
+            AppendIndent(builder, 1);
+            builder.Append("\"scriptGuidRemappings\": [\n");
+            var orderedScriptRemaps = ScriptGuidRemappings
+                .OrderBy(r => r.TargetAssetPath)
+                .ThenBy(r => r.ScriptType)
+                .ThenBy(r => r.StubGuid)
+                .ToList();
+            for (int i = 0; i < orderedScriptRemaps.Count; i++)
+            {
+                var remap = orderedScriptRemaps[i];
+                AppendIndent(builder, 2);
+                builder.Append("{\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"assetPath\": ");
+                builder.Append(EscapeString(remap.TargetAssetPath));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"scriptType\": ");
+                builder.Append(EscapeString(remap.ScriptType));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"stubScriptPath\": ");
+                builder.Append(EscapeString(remap.StubScriptPath));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"realScriptPath\": ");
+                builder.Append(EscapeString(remap.RealScriptPath));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"oldGuid\": ");
+                builder.Append(EscapeString(remap.StubGuid));
+                builder.Append(",\n");
+
+                AppendIndent(builder, 3);
+                builder.Append("\"newGuid\": ");
+                builder.Append(EscapeString(remap.RealGuid));
+                builder.Append('\n');
+
+                AppendIndent(builder, 2);
+                builder.Append('}');
+                if (i < orderedScriptRemaps.Count - 1)
+                {
+                    builder.Append(',');
+                }
+                builder.Append('\n');
+            }
+            AppendIndent(builder, 1);
+            builder.Append("]\n");
+
             builder.Append('}');
             return builder.ToString();
         }
@@ -548,5 +663,16 @@ namespace DivineDragon
         public FilePath FilePath { get; set; }
         public FileID OldFileId { get; set; }
         public FileID NewFileId { get; set; }
+    }
+
+    [Serializable]
+    public class ScriptGuidRemapping
+    {
+        public string TargetAssetPath { get; set; }
+        public string ScriptType { get; set; }
+        public string StubScriptPath { get; set; }
+        public string RealScriptPath { get; set; }
+        public Guid StubGuid { get; set; }
+        public Guid RealGuid { get; set; }
     }
 }

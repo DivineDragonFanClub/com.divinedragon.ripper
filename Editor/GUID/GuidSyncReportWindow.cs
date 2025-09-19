@@ -79,15 +79,18 @@ namespace DivineDragon
 
             var summaryContainer = new VisualElement();
             summaryContainer.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.3f);
-            summaryContainer.style.paddingTop = 12;
-            summaryContainer.style.paddingBottom = 12;
-            summaryContainer.style.paddingLeft = 15;
-            summaryContainer.style.paddingRight = 15;
-            summaryContainer.style.marginBottom = 15;
-            summaryContainer.style.borderTopLeftRadius = 5;
-            summaryContainer.style.borderTopRightRadius = 5;
-            summaryContainer.style.borderBottomLeftRadius = 5;
-            summaryContainer.style.borderBottomRightRadius = 5;
+            summaryContainer.style.paddingTop = 14;
+            summaryContainer.style.paddingBottom = 14;
+            summaryContainer.style.paddingLeft = 18;
+            summaryContainer.style.paddingRight = 18;
+            summaryContainer.style.marginBottom = 22;
+            summaryContainer.style.borderTopLeftRadius = 6;
+            summaryContainer.style.borderTopRightRadius = 6;
+            summaryContainer.style.borderBottomLeftRadius = 6;
+            summaryContainer.style.borderBottomRightRadius = 6;
+            summaryContainer.style.flexDirection = FlexDirection.Column;
+            summaryContainer.style.alignItems = Align.FlexStart;
+            summaryContainer.style.flexShrink = 0;
 
             var summaryLabel = new Label("Summary");
             summaryLabel.style.fontSize = 14;
@@ -97,6 +100,8 @@ namespace DivineDragon
 
             var summaryText = new Label(_report.SummaryText ?? "No summary available");
             summaryText.style.whiteSpace = WhiteSpace.Normal;
+            summaryText.style.marginTop = 6;
+            summaryText.style.marginBottom = 8;
             summaryContainer.Add(summaryText);
 
             root.Add(summaryContainer);
@@ -148,6 +153,12 @@ namespace DivineDragon
             {
                 var remappedFilesSection = CreateRemappedFilesSection(CloneLookup(fileIdLookup));
                 _scrollView.Add(remappedFilesSection);
+            }
+
+            if (_report.ScriptGuidRemappings != null && _report.ScriptGuidRemappings.Count > 0)
+            {
+                var scriptRemapSection = CreateScriptRemappingsSection();
+                _scrollView.Add(scriptRemapSection);
             }
 
             if (_report.SkippedFiles != null && _report.SkippedFiles.Count > 0)
@@ -318,6 +329,145 @@ namespace DivineDragon
             }
 
             foldout.Add(scrollView);
+            section.Add(foldout);
+            return section;
+        }
+
+        private VisualElement CreateScriptRemappingsSection()
+        {
+            var section = new VisualElement();
+            section.style.marginBottom = 20;
+            section.style.marginTop = 10;
+
+            var titleLabel = new Label($"Script Stub Remappings ({_report.ScriptGuidRemappings.Count})");
+            titleLabel.style.fontSize = 14;
+            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            titleLabel.style.marginBottom = 8;
+            section.Add(titleLabel);
+
+            var foldout = new Foldout();
+            foldout.text = "Script Remaps";
+            foldout.value = false;
+
+            var grouped = _report.ScriptGuidRemappings
+                .OrderBy(r => r.TargetAssetPath)
+                .ThenBy(r => r.ScriptType)
+                .GroupBy(r => string.IsNullOrEmpty(r.TargetAssetPath) ? "(Unknown Asset)" : r.TargetAssetPath);
+
+            foreach (var group in grouped)
+            {
+                var container = BuildRemapContainer(group.Key);
+
+                foreach (var remap in group)
+                {
+                    var infoBlock = new VisualElement();
+                    infoBlock.style.marginLeft = 15;
+                    infoBlock.style.marginBottom = 8;
+                    infoBlock.style.flexDirection = FlexDirection.Column;
+
+                    var headerRow = new VisualElement();
+                    headerRow.style.flexDirection = FlexDirection.Row;
+                    headerRow.style.alignItems = Align.Center;
+
+                    var arrowLabel = new Label("→");
+                    arrowLabel.style.fontSize = 10;
+                    arrowLabel.style.color = new Color(0.7f, 0.7f, 0.9f);
+                    arrowLabel.style.marginRight = 6;
+                    headerRow.Add(arrowLabel);
+
+                    var scriptLabel = new Label(remap.ScriptType ?? "(Unknown Script)");
+                    scriptLabel.style.fontSize = 11;
+                    scriptLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+                    headerRow.Add(scriptLabel);
+
+                    infoBlock.Add(headerRow);
+
+                    if (!string.IsNullOrEmpty(remap.RealScriptPath))
+                    {
+                        var realPath = ConvertToUnityAssetPath(remap.RealScriptPath);
+                        if (!string.IsNullOrEmpty(realPath))
+                        {
+                            var realRow = new VisualElement();
+                            realRow.style.flexDirection = FlexDirection.Row;
+                            realRow.style.alignItems = Align.Center;
+                            realRow.style.marginTop = 2;
+
+                            var realLabel = new Label("Real Script:");
+                            realLabel.style.fontSize = 9;
+                            realLabel.style.marginRight = 6;
+                            realRow.Add(realLabel);
+
+                            var realButton = new Button(() => SelectAssetInProject(realPath))
+                            {
+                                text = realPath
+                            };
+                            realButton.style.fontSize = 9;
+                            realButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+                            realButton.style.backgroundColor = Color.clear;
+                            realButton.style.borderLeftWidth = 0;
+                            realButton.style.borderRightWidth = 0;
+                            realButton.style.borderTopWidth = 0;
+                            realButton.style.borderBottomWidth = 0;
+                            realButton.style.paddingLeft = 2;
+                            realButton.style.paddingRight = 2;
+                            realRow.Add(realButton);
+
+                            infoBlock.Add(realRow);
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(remap.StubScriptPath))
+                    {
+                        var stubRow = new VisualElement();
+                        stubRow.style.flexDirection = FlexDirection.Row;
+                        stubRow.style.alignItems = Align.Center;
+                        stubRow.style.marginTop = 2;
+
+                        var stubLabel = new Label("Stub Source:");
+                        stubLabel.style.fontSize = 9;
+                        stubLabel.style.marginRight = 6;
+                        stubRow.Add(stubLabel);
+
+                        var stubValue = new Label(remap.StubScriptPath.Replace('\\', '/'));
+                        stubValue.style.fontSize = 9;
+                        stubValue.style.opacity = 0.7f;
+                        stubRow.Add(stubValue);
+
+                        infoBlock.Add(stubRow);
+                    }
+
+                    var guidRow = new VisualElement();
+                    guidRow.style.flexDirection = FlexDirection.Row;
+                    guidRow.style.alignItems = Align.Center;
+                    guidRow.style.marginTop = 3;
+
+                    var guidLabel = new Label("GUID:");
+                    guidLabel.style.fontSize = 9;
+                    guidLabel.style.marginRight = 6;
+                    guidRow.Add(guidLabel);
+
+                    var oldGuidButton = CreateGuidButton(remap.StubGuid, null, new Color(0.3f, 0.15f, 0.15f, 0.2f));
+                    oldGuidButton.style.fontSize = 9;
+                    guidRow.Add(oldGuidButton);
+
+                    var guidArrow = new Label(" → ");
+                    guidArrow.style.fontSize = 9;
+                    guidArrow.style.marginLeft = 6;
+                    guidArrow.style.marginRight = 6;
+                    guidRow.Add(guidArrow);
+
+                    var newGuidButton = CreateGuidButton(remap.RealGuid, null, new Color(0.15f, 0.3f, 0.15f, 0.2f));
+                    newGuidButton.style.fontSize = 9;
+                    guidRow.Add(newGuidButton);
+
+                    infoBlock.Add(guidRow);
+
+                    container.Add(infoBlock);
+                }
+
+                foldout.Add(container);
+            }
+
             section.Add(foldout);
             return section;
         }
@@ -769,7 +919,9 @@ namespace DivineDragon
         {
             var buttonContainer = new VisualElement();
             buttonContainer.style.flexDirection = FlexDirection.Row;
-            buttonContainer.style.marginBottom = 10;
+            buttonContainer.style.alignItems = Align.FlexStart;
+            buttonContainer.style.marginTop = 6;
+            buttonContainer.style.marginBottom = 18;
 
             var jsonButton = new Button(() =>
             {
@@ -793,7 +945,12 @@ namespace DivineDragon
             {
                 text = "Export Report to JSON"
             };
-            jsonButton.style.width = 140;
+            jsonButton.style.minWidth = 190;
+            jsonButton.style.height = 26;
+            jsonButton.style.alignSelf = Align.FlexStart;
+            jsonButton.style.paddingLeft = 10;
+            jsonButton.style.paddingRight = 10;
+            jsonButton.style.marginLeft = 2;
             buttonContainer.Add(jsonButton);
 
             return buttonContainer;
