@@ -11,7 +11,36 @@ namespace DivineDragon
     {
         private static readonly Regex GuidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
 
-        public static HashSet<string> EnsureDirectories(IEnumerable<string> directories)
+        public static void Apply(
+            string targetDir,
+            string sourceDir,
+            SyncOperations operations,
+            IEnumerable<string> directoriesToCreate,
+            IEnumerable<ScriptUtils.ScriptMapping> stubMappings,
+            bool forceImport)
+        {
+            if (operations == null) throw new ArgumentNullException(nameof(operations));
+            if (string.IsNullOrEmpty(targetDir)) throw new ArgumentException("Target directory is required", nameof(targetDir));
+            if (string.IsNullOrEmpty(sourceDir)) throw new ArgumentException("Source directory is required", nameof(sourceDir));
+
+            var createdDirectories = EnsureDirectories(directoriesToCreate);
+            ExecuteCopies(operations.Copies, forceImport);
+
+            var scriptRemaps = ComputeScriptRemapOperations(sourceDir, operations.Copies, stubMappings);
+            if (scriptRemaps.Count > 0)
+            {
+                operations.ScriptRemaps.AddRange(scriptRemaps);
+                ApplyScriptRemappings(targetDir, scriptRemaps);
+            }
+
+            var synchronizer = new GuidSynchronizer(targetDir, sourceDir);
+            synchronizer.Synchronize(operations, GuidSyncMode.Analyze);
+            synchronizer.Synchronize(null, GuidSyncMode.Apply);
+
+            CleanupEmptyDirectories(createdDirectories);
+        }
+
+        private static HashSet<string> EnsureDirectories(IEnumerable<string> directories)
         {
             var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -42,7 +71,7 @@ namespace DivineDragon
             return created;
         }
 
-        public static void ExecuteCopies(IEnumerable<CopyAssetOperation> copies, bool forceImport)
+        private static void ExecuteCopies(IEnumerable<CopyAssetOperation> copies, bool forceImport)
         {
             if (copies == null)
             {
@@ -74,27 +103,89 @@ namespace DivineDragon
             }
         }
 
-        public static void ApplyScriptRemappings(string targetDir, IEnumerable<ScriptRemapOperation> remaps)
+        private static List<ScriptRemapOperation> ComputeScriptRemapOperations(
+            string sourceDir,
+            IEnumerable<CopyAssetOperation> copies,
+            IEnumerable<ScriptUtils.ScriptMapping> stubMappings)
         {
-            if (remaps == null)
+            var results = new List<ScriptRemapOperation>();
+            if (copies == null)
+                return results;
+
+            if (stubMappings == null)
+                return results;
+
+            var mappingList = stubMappings.ToList();
+            if (mappingList.Count == 0)
+                return results;
+
+            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mapping in mappingList)
             {
-                return;
+                if (!string.IsNullOrEmpty(mapping.StubGuid))
+                {
+                    guidMap[mapping.StubGuid] = mapping;
+                }
             }
 
-            var remapList = remaps.ToList();
-            if (remapList.Count == 0)
+            if (guidMap.Count == 0)
+                return results;
+
+            foreach (var copy in copies)
             {
-                return;
+                if (copy.IsMeta)
+                    continue;
+
+                if (string.IsNullOrEmpty(copy.TargetPath) || !File.Exists(copy.TargetPath))
+                    continue;
+
+                var content = File.ReadAllText(copy.TargetPath);
+                if (string.IsNullOrEmpty(content))
+                    continue;
+
+                var recordedForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (Match match in GuidRegex.Matches(content))
+                {
+                    string oldGuid = match.Groups[1].Value;
+                    if (!guidMap.TryGetValue(oldGuid, out var mapping))
+                        continue;
+
+                    var recordKey = $"{copy.UnityPath}|{mapping.StubGuid}|{mapping.RealGuid}";
+                    if (!recordedForFile.Add(recordKey))
+                        continue;
+
+                    var targetPath = copy.UnityPath;
+                    var realScriptPath = ConvertAbsoluteToUnityPath(mapping.RealPath, Application.dataPath);
+                    var stubScriptPath = ConvertAbsoluteToUnityPath(mapping.StubPath, sourceDir);
+
+                    results.Add(new ScriptRemapOperation
+                    {
+                        TargetAssetPath = targetPath,
+                        ScriptType = mapping.TypeName,
+                        StubGuid = mapping.StubGuid,
+                        RealGuid = mapping.RealGuid,
+                        StubScriptPath = stubScriptPath,
+                        RealScriptPath = realScriptPath
+                    });
+                }
             }
+
+            return results;
+        }
+
+        private static void ApplyScriptRemappings(string targetDir, IEnumerable<ScriptRemapOperation> remaps)
+        {
+            var remapList = remaps?.ToList();
+            if (remapList == null || remapList.Count == 0)
+                return;
 
             foreach (var group in remapList.GroupBy(r => r.TargetAssetPath))
             {
                 var unityPath = group.Key;
                 var absolutePath = ConvertUnityToAbsolutePath(unityPath, targetDir);
                 if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
-                {
                     continue;
-                }
 
                 var replacements = new Dictionary<string, ScriptRemapOperation>(StringComparer.OrdinalIgnoreCase);
                 foreach (var remap in group)
@@ -113,9 +204,7 @@ namespace DivineDragon
                 {
                     var oldGuid = match.Groups[1].Value;
                     if (!replacements.TryGetValue(oldGuid, out var remap))
-                    {
                         return match.Value;
-                    }
 
                     modified = true;
                     var logKey = $"{unityPath}|{oldGuid}";
@@ -123,7 +212,6 @@ namespace DivineDragon
                     {
                         Debug.Log($"Remapping GUID in {Path.GetFileName(absolutePath)}: {oldGuid} -> {remap.RealGuid}");
                     }
-
                     return $"guid: {remap.RealGuid}";
                 });
 
@@ -134,17 +222,39 @@ namespace DivineDragon
             }
         }
 
+        private static void CleanupEmptyDirectories(HashSet<string> createdDirectories)
+        {
+            if (createdDirectories == null || createdDirectories.Count == 0)
+                return;
+
+            var sortedDirs = createdDirectories.OrderByDescending(d => d.Length).ToList();
+
+            foreach (var dir in sortedDirs)
+            {
+                if (!Directory.Exists(dir))
+                    continue;
+
+                if (Directory.GetFiles(dir).Any() || Directory.GetDirectories(dir).Any())
+                    continue;
+
+                try
+                {
+                    Directory.Delete(dir);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Failed to delete empty directory {dir}: {ex.Message}");
+                }
+            }
+        }
+
         private static string ConvertUnityToAbsolutePath(string unityPath, string assetsRoot)
         {
             if (string.IsNullOrEmpty(unityPath))
-            {
                 return unityPath;
-            }
 
             if (Path.IsPathRooted(unityPath))
-            {
                 return unityPath;
-            }
 
             string root = assetsRoot;
             if (string.IsNullOrEmpty(root))
@@ -162,6 +272,29 @@ namespace DivineDragon
             }
 
             return Path.Combine(root, unityPath.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        private static string ConvertAbsoluteToUnityPath(string absolutePath, string assetsRoot)
+        {
+            if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(assetsRoot))
+            {
+                return absolutePath;
+            }
+
+            var normalizedPath = Path.GetFullPath(absolutePath).Replace('\\', '/');
+            var normalizedRoot = Path.GetFullPath(assetsRoot).Replace('\\', '/');
+
+            if (!normalizedRoot.EndsWith("/", StringComparison.Ordinal))
+            {
+                normalizedRoot += "/";
+            }
+
+            if (normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Assets/" + normalizedPath.Substring(normalizedRoot.Length);
+            }
+
+            return normalizedPath;
         }
     }
 }
