@@ -188,6 +188,8 @@ namespace DivineDragon
                 string targetFilePath = filePath.Replace(sourceDir, targetDir);
                 string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
 
+                bool isDuplicateShader = false;
+
                 // Check for duplicate shaders by name
                 if (ShaderUtils.IsShaderFile(filePath) && !isMetaFile)
                 {
@@ -197,10 +199,12 @@ namespace DivineDragon
                         if (existingShaderNames.Contains(shaderName))
                         {
                             skippedDuplicateShaders.Add(unityRelativeTarget);
-                            continue; // Skip this shader and its meta file
+                            isDuplicateShader = true;
                         }
-
-                        existingShaderNames.Add(shaderName);
+                        else
+                        {
+                            existingShaderNames.Add(shaderName);
+                        }
                     }
                 }
 
@@ -219,6 +223,20 @@ namespace DivineDragon
                 }
 
                 bool targetExists = File.Exists(targetFilePath);
+
+                if (isDuplicateShader)
+                {
+                    // Record as skipped so GUID synchronization maps old shader GUID to project shader GUID
+                    if (!isMetaFile)
+                    {
+                        result.SkippedFiles++;
+                        if (!skippedFiles.Contains(unityRelativeTarget))
+                        {
+                            skippedFiles.Add(unityRelativeTarget);
+                        }
+                    }
+                    continue;
+                }
 
                 if (!isMetaFile)
                 {
