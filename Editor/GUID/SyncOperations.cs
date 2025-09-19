@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using UnityEngine;
 
 namespace DivineDragon
 {
@@ -102,41 +100,4 @@ namespace DivineDragon
         public int FileIdRemapCount => FileIdRemaps.Count;
     }
 
-    internal static class SyncOperationsHelpers
-    {
-        public static bool IsMeta(string path)
-        {
-            return !string.IsNullOrEmpty(path) && path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase);
-        }
-    }
-
-    public static class SyncOperationExecutor
-    {
-        public static void ExecuteCopies(IEnumerable<CopyAssetOperation> copies, bool forceImport)
-        {
-            foreach (var copy in copies)
-            {
-                try
-                {
-                    if (!forceImport && File.Exists(copy.TargetPath))
-                    {
-                        continue;
-                    }
-
-                    var directory = Path.GetDirectoryName(copy.TargetPath);
-                    if (!string.IsNullOrEmpty(directory))
-                    {
-                        Directory.CreateDirectory(directory);
-                    }
-
-                    File.Copy(copy.SourcePath, copy.TargetPath, true);
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"Failed to copy asset {copy.SourcePath} -> {copy.TargetPath}: {ex.Message}");
-                    throw;
-                }
-            }
-        }
-    }
 }

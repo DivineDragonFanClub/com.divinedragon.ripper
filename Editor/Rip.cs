@@ -262,8 +262,8 @@ namespace DivineDragon
                 });
             }
 
-            var createdDirectories = CreateDirectories(directoriesToCreate);
-            SyncOperationExecutor.ExecuteCopies(operations.Copies, forceImport);
+            var createdDirectories = SyncOperationApplier.EnsureDirectories(directoriesToCreate);
+            SyncOperationApplier.ExecuteCopies(operations.Copies, forceImport);
 
             if (stubToRealGuidMappings.Count > 0)
             {
@@ -273,7 +273,7 @@ namespace DivineDragon
 
             if (operations.ScriptRemaps.Count > 0)
             {
-                ApplyScriptRemappings(targetDir, operations.ScriptRemaps);
+                SyncOperationApplier.ApplyScriptRemappings(targetDir, operations.ScriptRemaps);
             }
 
             var synchronizer = new GuidSynchronizer(targetDir, sourceDir);
@@ -366,111 +366,6 @@ namespace DivineDragon
             return results;
         }
 
-        private static void ApplyScriptRemappings(string targetDir, IEnumerable<ScriptRemapOperation> remaps)
-        {
-            if (remaps == null)
-                return;
-
-            var remapList = remaps.ToList();
-            if (remapList.Count == 0)
-                return;
-
-            var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
-
-            foreach (var group in remapList.GroupBy(r => r.TargetAssetPath))
-            {
-                var unityPath = group.Key;
-                var absolutePath = ConvertUnityToAbsolutePath(unityPath, targetDir);
-                if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
-                    continue;
-
-                var replacements = new Dictionary<string, ScriptRemapOperation>(StringComparer.OrdinalIgnoreCase);
-                foreach (var remap in group)
-                {
-                    if (!replacements.ContainsKey(remap.StubGuid))
-                    {
-                        replacements[remap.StubGuid] = remap;
-                    }
-                }
-
-                string content = File.ReadAllText(absolutePath);
-                bool modified = false;
-                var logged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                string newContent = guidRegex.Replace(content, match =>
-                {
-                    var oldGuid = match.Groups[1].Value;
-                    if (!replacements.TryGetValue(oldGuid, out var remap))
-                        return match.Value;
-
-                    modified = true;
-                    var logKey = $"{unityPath}|{oldGuid}";
-                    if (logged.Add(logKey))
-                    {
-                        Debug.Log($"Remapping GUID in {Path.GetFileName(absolutePath)}: {oldGuid} -> {remap.RealGuid}");
-                    }
-                    return $"guid: {remap.RealGuid}";
-                });
-
-                if (modified)
-                {
-                    File.WriteAllText(absolutePath, newContent);
-                }
-            }
-        }
-
-        private static HashSet<string> CreateDirectories(IEnumerable<string> directories)
-        {
-            var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (directories == null)
-                return created;
-
-            foreach (var dir in directories)
-            {
-                if (string.IsNullOrEmpty(dir))
-                    continue;
-
-                var normalized = Path.GetFullPath(dir);
-                if (!Directory.Exists(normalized))
-                {
-                    Directory.CreateDirectory(normalized);
-                    created.Add(normalized);
-                }
-                else
-                {
-                    Directory.CreateDirectory(normalized);
-                }
-            }
-
-            return created;
-        }
-
-        private static string ConvertUnityToAbsolutePath(string unityPath, string assetsRoot)
-        {
-            if (string.IsNullOrEmpty(unityPath))
-                return unityPath;
-
-            if (Path.IsPathRooted(unityPath))
-                return unityPath;
-
-            string root = assetsRoot;
-            if (string.IsNullOrEmpty(root))
-            {
-                root = Application.dataPath;
-            }
-
-            root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            const string assetsPrefix = "Assets/";
-            if (unityPath.StartsWith(assetsPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                var relative = unityPath.Substring(assetsPrefix.Length);
-                return Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
-            }
-
-            return Path.Combine(root, unityPath.Replace('/', Path.DirectorySeparatorChar));
-        }
-
         private static string GetRelativePath(string basePath, string fullPath)
         {
             if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
@@ -480,71 +375,6 @@ namespace DivineDragon
                 return fullPath.Substring(basePath.Length);
 
             return Path.GetFileName(fullPath);
-        }
-
-        private static List<ScriptRemapOperation> ApplyGuidRemappings(string targetDir, string sourceDir, List<ScriptUtils.ScriptMapping> mappings)
-        {
-            var remapResults = new List<ScriptRemapOperation>();
-            if (mappings.Count == 0)
-                return remapResults;
-
-            // Build a dictionary for quick lookup
-            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>(StringComparer.OrdinalIgnoreCase);
-            foreach (var mapping in mappings)
-            {
-                if (!string.IsNullOrEmpty(mapping.StubGuid))
-                {
-                    guidMap[mapping.StubGuid] = mapping;
-                }
-            }
-
-            // Find all files that might have references (be naive and scan everything)
-            var filesToUpdate = Directory.GetFiles(targetDir, "*", SearchOption.AllDirectories);
-
-            var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
-
-            foreach (var file in filesToUpdate)
-            {
-                bool modified = false;
-                var recordedForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                string content = File.ReadAllText(file);
-                string newContent = guidRegex.Replace(content, match =>
-                {
-                    string oldGuid = match.Groups[1].Value;
-                    if (guidMap.TryGetValue(oldGuid, out var mapping))
-                    {
-                        modified = true;
-                        Debug.Log($"Remapping GUID in {Path.GetFileName(file)}: {oldGuid} -> {mapping.RealGuid}");
-
-                        var targetPath = ConvertAbsoluteToUnityPath(file, targetDir);
-                        var realScriptPath = ConvertAbsoluteToUnityPath(mapping.RealPath, Application.dataPath);
-                        var stubScriptPath = ConvertAbsoluteToUnityPath(mapping.StubPath, sourceDir);
-                        var recordKey = $"{targetPath}|{mapping.StubGuid}|{mapping.RealGuid}";
-                        if (recordedForFile.Add(recordKey))
-                        {
-                            remapResults.Add(new ScriptRemapOperation
-                            {
-                                TargetAssetPath = targetPath,
-                                ScriptType = mapping.TypeName,
-                                StubGuid = mapping.StubGuid,
-                                RealGuid = mapping.RealGuid,
-                                StubScriptPath = stubScriptPath,
-                                RealScriptPath = realScriptPath
-                            });
-                        }
-
-                        return $"guid: {mapping.RealGuid}";
-                    }
-                    return match.Value;
-                });
-
-                if (modified)
-                {
-                    File.WriteAllText(file, newContent);
-                }
-            }
-
-            return remapResults;
         }
 
         private static string ConvertAbsoluteToUnityPath(string absolutePath, string assetsRoot)
