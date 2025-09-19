@@ -18,7 +18,7 @@ namespace DivineDragon
     {
         private static readonly Regex NamespaceRegex = new Regex(@"^\s*namespace\s+([^\s{]+)", RegexOptions.Multiline);
         private static readonly Regex ClassRegex = new Regex(@"^\s*public\s+(?:partial\s+)?(?:abstract\s+)?(?:sealed\s+)?class\s+([^\s:<{]+)", RegexOptions.Multiline);
-        private static readonly Regex StubCommentRegex = new Regex(@"Dummy class\.|This could have happened for several reasons:", RegexOptions.IgnoreCase);
+        private static readonly Regex StubCommentRegex = new Regex(@"Dummy class\.", RegexOptions.IgnoreCase);
 
         public class TypeInfo
         {

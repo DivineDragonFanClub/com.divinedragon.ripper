@@ -17,6 +17,12 @@ namespace DivineDragon
 {
     /// GUID "synchronization" that coordinates the remapping of GUIDs
     /// from subordinate project (imported assets) to main project (current Unity project)
+    public enum GuidSyncMode
+    {
+        Analyze,
+        Apply
+    }
+
     public class GuidSynchronizer
     {
         private readonly DirectoryPath _mainProjectPath;
@@ -54,27 +60,29 @@ namespace DivineDragon
             public Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> FileIdUpdates { get; } = new Dictionary<FilePath, List<(Guid, FileID, FileID)>>();
         }
 
-        public GuidSyncReport Synchronize()
+        public void Synchronize(SyncOperations operations, GuidSyncMode mode)
         {
+            if (mode == GuidSyncMode.Analyze && operations == null)
+            {
+                throw new ArgumentNullException(nameof(operations));
+            }
+
             try
             {
                 ScanProjects();
 
                 if (_guidMappings.Count == 0)
                 {
-                    var emptyReport = new GuidSyncReport();
-                    emptyReport.FinalizeReport();
-                    return emptyReport;
+                    return;
                 }
 
                 // Do the actual work
-                var updateResult = UpdateReferences();
+                var updateResult = UpdateReferences(mode == GuidSyncMode.Apply);
 
-                // Build the report from the results
-                var report = BuildReport(updateResult);
-                report.FinalizeReport();
-
-                return report;
+                if (mode == GuidSyncMode.Analyze && operations != null)
+                {
+                    RecordOperations(updateResult, operations);
+                }
             }
             catch (Exception ex)
             {
@@ -83,10 +91,8 @@ namespace DivineDragon
             }
         }
 
-        private GuidSyncReport BuildReport(UpdateResult updateResult)
+        private void RecordOperations(UpdateResult updateResult, SyncOperations operations)
         {
-            var report = new GuidSyncReport();
-
             var replacedGuids = new HashSet<Guid>(updateResult.FileUpdates.SelectMany(kvp => kvp.Value));
             var mappingBySubGuid = _guidMappings.Values.ToDictionary(m => m.SubordinateGuid, m => m);
 
@@ -94,7 +100,16 @@ namespace DivineDragon
             {
                 if (replacedGuids.Contains(mapping.SubordinateGuid))
                 {
-                    report.AddGuidMapping(mapping.RelativePath, mapping.SubordinateGuid, mapping.MainGuid);
+                    var assetPath = ConvertRelativeAssetPath(mapping.RelativePath);
+                    var assetName = Path.GetFileNameWithoutExtension(assetPath);
+
+                    operations.GuidRemaps.Add(new GuidRemapOperation
+                    {
+                        AssetPath = assetPath,
+                        AssetName = assetName,
+                        OldGuid = mapping.SubordinateGuid,
+                        NewGuid = mapping.MainGuid
+                    });
                 }
             }
 
@@ -102,7 +117,21 @@ namespace DivineDragon
             {
                 foreach (var guid in kvp.Value)
                 {
-                    report.AddReferenceUpdate(kvp.Key, guid);
+                    if (mappingBySubGuid.TryGetValue(guid, out var mapping))
+                    {
+                        var assetPath = ConvertRelativeAssetPath(mapping.RelativePath);
+                        var assetName = Path.GetFileNameWithoutExtension(assetPath);
+                        var referencingPath = ConvertToUnityPathForReport(kvp.Key);
+
+                        operations.Dependencies.Add(new DependencyOperation
+                        {
+                            AssetPath = referencingPath,
+                            DependencyName = assetName,
+                            DependencyPath = assetPath,
+                            OldGuid = mapping.SubordinateGuid,
+                            NewGuid = mapping.MainGuid
+                        });
+                    }
                 }
             }
 
@@ -117,19 +146,21 @@ namespace DivineDragon
 
                 foreach (var remap in grouped)
                 {
+                    var targetPath = unityPath;
                     if (mappingBySubGuid.TryGetValue(remap.guid, out var guidMapping))
                     {
-                        var mappingPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
-                        report.AddFileIdRemapping(remap.guid, mappingPath, remap.oldFileId, remap.newFileId);
+                        targetPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
                     }
-                    else
+
+                    operations.FileIdRemaps.Add(new FileIdRemapOperation
                     {
-                        report.AddFileIdRemapping(remap.guid, unityPath, remap.oldFileId, remap.newFileId);
-                    }
+                        AssetPath = targetPath,
+                        Guid = remap.guid,
+                        OldFileId = remap.oldFileId,
+                        NewFileId = remap.newFileId
+                    });
                 }
             }
-
-            return report;
         }
 
         private static string ConvertRelativeAssetPath(RelativePath relativePath)
@@ -172,6 +203,8 @@ namespace DivineDragon
 
         private void ScanProjects()
         {
+            _guidMappings.Clear();
+
             var mainMetaFiles = ScanMetaFiles(_mainProjectPath);
             var subordinateMetaFiles = ScanMetaFiles(_subordinateProjectPath);
 
@@ -316,7 +349,7 @@ namespace DivineDragon
             return Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
         }
 
-        private UpdateResult UpdateReferences()
+        private UpdateResult UpdateReferences(bool applyChanges)
         {
             // Create mapping from old GUIDs to new GUIDs
             var guidRemapping = _guidMappings.Values.ToDictionary<GuidMapping, Guid, Guid>(
@@ -347,7 +380,7 @@ namespace DivineDragon
             var fileUpdates = new Dictionary<FilePath, HashSet<Guid>>();
             var fileIdUpdates = new Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>>();
 
-            foreach (var filePath in Directory.GetFiles(_subordinateProjectPath, "*", SearchOption.AllDirectories))
+            foreach (var filePath in Directory.GetFiles(_mainProjectPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath))
                     continue;
@@ -355,7 +388,7 @@ namespace DivineDragon
                 if (!UnityFileUtils.IsUnityYamlFile(filePath))
                     continue;
 
-                var replacedGuids = UpdateFileReferences(filePath, guidRemapping, fileIdMappings, fileIdUpdates);
+                var replacedGuids = UpdateFileReferences(filePath, guidRemapping, fileIdMappings, fileIdUpdates, applyChanges);
                 if (replacedGuids.Count > 0)
                 {
                     fileUpdates[filePath] = replacedGuids;
@@ -383,7 +416,8 @@ namespace DivineDragon
             FilePath filePath,
             Dictionary<Guid, Guid> guidMappings,
             Dictionary<Guid, Dictionary<FileID, FileID>> fileIdMappings,
-            Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> fileIdUpdates)
+            Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> fileIdUpdates,
+            bool applyChanges)
         {
             var replacedGuids = new HashSet<Guid>();
 
@@ -448,7 +482,7 @@ namespace DivineDragon
                     return match.Value;
                 });
 
-                if (replacedGuids.Count > 0)
+                if (replacedGuids.Count > 0 && applyChanges)
                 {
                     File.WriteAllText(filePath, content);
                 }

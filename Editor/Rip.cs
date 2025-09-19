@@ -88,20 +88,6 @@ namespace DivineDragon
             }
         }
 
-        private static GuidSyncReport SynchronizeGuids(string mainProjectAssetsPath, string subordinateAssetsPath)
-        {
-            try
-            {
-                var synchronizer = new GuidSynchronizer(mainProjectAssetsPath, subordinateAssetsPath);
-                return synchronizer.Synchronize();
-            }
-            catch (System.Exception ex)
-            {
-                Debug.LogError($"GUID synchronization failed: {ex.Message}");
-                return new GuidSyncReport();
-            }
-        }
-
         private class CopyResult
         {
             public int NewFiles;
@@ -111,76 +97,51 @@ namespace DivineDragon
 
         private static CopyResult CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
         {
-            var result = new CopyResult();
-            var initialReport = new GuidSyncReport();
+            var operations = new SyncOperations();
+            var directoriesToCreate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             var allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
+            foreach (var dirPath in allDirectories)
+            {
+                string targetDirPath = dirPath.Replace(sourceDir, targetDir);
+                directoriesToCreate.Add(targetDirPath);
+            }
+
             var allFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
 
-            // Build shader registry for deduplication
             var existingShaderNames = ShaderUtils.GetExistingShaderNames();
-            var skippedDuplicateShaders = new List<string>();
-
-            // Build assembly registry and identify folders to skip
             var existingAssemblyNames = AssemblyUtils.GetExistingAssemblyNames();
             var skipFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var skippedAssemblyInfo = new List<(string assemblyName, string folderPath)>();
-
-            // Find all .asmdef files and check for duplicates or invalid assemblies
+            var skippedAssemblyInfo = new List<(string assemblyName, string folderPath, SkipReason reason)>();
             var stubToRealGuidMappings = new List<ScriptUtils.ScriptMapping>();
 
             foreach (var filePath in allFiles)
             {
-                if (AssemblyUtils.IsAssemblyDefinitionFile(filePath))
+                if (!AssemblyUtils.IsAssemblyDefinitionFile(filePath))
+                    continue;
+
+                string assemblyName = AssemblyUtils.ExtractAssemblyName(filePath);
+
+                if (string.IsNullOrEmpty(assemblyName))
                 {
-                    string assemblyName = AssemblyUtils.ExtractAssemblyName(filePath);
+                    string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
+                    skipFolders.Add(assemblyFolder);
+                    skippedAssemblyInfo.Add(("Invalid/Empty Assembly", assemblyFolder, SkipReason.InvalidAssembly));
+                }
+                else if (existingAssemblyNames.Contains(assemblyName))
+                {
+                    string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
+                    var mappings = ScriptUtils.CreateStubToRealGuidMappings(assemblyFolder, assemblyName);
+                    stubToRealGuidMappings.AddRange(mappings);
 
-                    // Skip invalid assemblies (null or empty names)
-                    if (string.IsNullOrEmpty(assemblyName))
-                    {
-                        string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
-                        skipFolders.Add(assemblyFolder);
-                        skippedAssemblyInfo.Add(("Invalid/Empty Assembly", assemblyFolder));
-                    }
-                    // Skip duplicate assemblies
-                    else if (existingAssemblyNames.Contains(assemblyName))
-                    {
-                        string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
-
-                        // Create GUID mappings for stub scripts to real scripts
-                        var mappings = ScriptUtils.CreateStubToRealGuidMappings(assemblyFolder, assemblyName);
-                        stubToRealGuidMappings.AddRange(mappings);
-
-                        skipFolders.Add(assemblyFolder);
-                        skippedAssemblyInfo.Add((assemblyName, assemblyFolder));
-                    }
+                    skipFolders.Add(assemblyFolder);
+                    skippedAssemblyInfo.Add((assemblyName, assemblyFolder, SkipReason.DuplicateAssembly));
                 }
             }
-
-            var createdDirectories = new HashSet<string>();
-            foreach (var dirPath in allDirectories)
-            {
-                string targetDirPath = dirPath.Replace(sourceDir, targetDir);
-                Directory.CreateDirectory(targetDirPath);
-                createdDirectories.Add(targetDirPath);
-            }
-
-            var newFiles = new List<string>();
-            var skippedFiles = new List<string>();
-            var filesToCopy = new List<string>();
 
             foreach (var filePath in allFiles)
             {
-                // Skip files in assembly folders that are being skipped
-                bool inSkipFolder = false;
-                foreach (var skipFolder in skipFolders)
-                {
-                    if (AssemblyUtils.IsPathInFolder(filePath, skipFolder))
-                    {
-                        inSkipFolder = true;
-                        break;
-                    }
-                }
+                bool inSkipFolder = skipFolders.Any(skipFolder => AssemblyUtils.IsPathInFolder(filePath, skipFolder));
                 if (inSkipFolder)
                     continue;
 
@@ -190,7 +151,6 @@ namespace DivineDragon
 
                 bool isDuplicateShader = false;
 
-                // Check for duplicate shaders by name
                 if (ShaderUtils.IsShaderFile(filePath) && !isMetaFile)
                 {
                     string shaderName = ShaderUtils.ExtractShaderName(filePath);
@@ -198,7 +158,6 @@ namespace DivineDragon
                     {
                         if (existingShaderNames.Contains(shaderName))
                         {
-                            skippedDuplicateShaders.Add(unityRelativeTarget);
                             isDuplicateShader = true;
                         }
                         else
@@ -208,158 +167,308 @@ namespace DivineDragon
                     }
                 }
 
-                // Skip meta files for shaders we're not copying
                 if (isMetaFile)
                 {
-                    string baseFile = filePath.Substring(0, filePath.Length - 5); // Remove .meta
+                    string baseFile = filePath.Substring(0, filePath.Length - 5);
                     if (ShaderUtils.IsShaderFile(baseFile))
                     {
                         string shaderName = ShaderUtils.ExtractShaderName(baseFile);
                         if (!string.IsNullOrEmpty(shaderName) && existingShaderNames.Contains(shaderName))
                         {
-                            continue; // Skip meta file for duplicate shader
+                            continue;
                         }
                     }
                 }
-
-                bool targetExists = File.Exists(targetFilePath);
 
                 if (isDuplicateShader)
                 {
-                    // Record as skipped so GUID synchronization maps old shader GUID to project shader GUID
                     if (!isMetaFile)
                     {
-                        result.SkippedFiles++;
-                        if (!skippedFiles.Contains(unityRelativeTarget))
+                        operations.Skips.Add(new SkipAssetOperation
                         {
-                            skippedFiles.Add(unityRelativeTarget);
-                        }
+                            UnityPath = unityRelativeTarget,
+                            Reason = SkipReason.DuplicateShader
+                        });
                     }
                     continue;
                 }
+
+                bool targetExists = File.Exists(targetFilePath);
 
                 if (!isMetaFile)
                 {
                     if (!targetExists)
                     {
-                        result.NewFiles++;
-                        newFiles.Add(unityRelativeTarget);
+                        operations.Copies.Add(new CopyAssetOperation
+                        {
+                            SourcePath = filePath,
+                            TargetPath = targetFilePath,
+                            UnityPath = unityRelativeTarget,
+                            Overwrite = true,
+                            IsNew = true,
+                            IsMeta = false
+                        });
+                    }
+                    else if (forceImport)
+                    {
+                        operations.Copies.Add(new CopyAssetOperation
+                        {
+                            SourcePath = filePath,
+                            TargetPath = targetFilePath,
+                            UnityPath = unityRelativeTarget,
+                            Overwrite = true,
+                            IsNew = false,
+                            IsMeta = false
+                        });
                     }
                     else
                     {
-                        result.SkippedFiles++;
-                        skippedFiles.Add(unityRelativeTarget);
+                        operations.Skips.Add(new SkipAssetOperation
+                        {
+                            UnityPath = unityRelativeTarget,
+                            Reason = SkipReason.AlreadyExists
+                        });
+                        continue;
                     }
                 }
+                else
+                {
+                    bool shouldCopyMeta = !targetExists || forceImport;
+                    if (!shouldCopyMeta)
+                    {
+                        continue;
+                    }
 
-                filesToCopy.Add(filePath);
+                    operations.Copies.Add(new CopyAssetOperation
+                    {
+                        SourcePath = filePath,
+                        TargetPath = targetFilePath,
+                        UnityPath = unityRelativeTarget,
+                        Overwrite = true,
+                        IsNew = !targetExists,
+                        IsMeta = true
+                    });
+                }
             }
 
-            foreach (var path in newFiles)
-            {
-                initialReport.AddNewFile(path);
-            }
-
-            foreach (var path in skippedFiles)
-            {
-                initialReport.AddSkippedFile(path);
-            }
-
-            // Add duplicate shaders to report
-            foreach (var path in skippedDuplicateShaders)
-            {
-                initialReport.AddDuplicateShader(path);
-            }
-
-            // Add duplicate assemblies to report
-            foreach (var (assemblyName, folderPath) in skippedAssemblyInfo)
+            foreach (var (assemblyName, folderPath, reason) in skippedAssemblyInfo)
             {
                 string unityRelativePath = folderPath.Replace(sourceDir, "").TrimStart('/', '\\');
-                initialReport.AddDuplicateAssembly(assemblyName, unityRelativePath);
+                operations.Skips.Add(new SkipAssetOperation
+                {
+                    UnityPath = unityRelativePath,
+                    Reason = reason,
+                    Details = assemblyName
+                });
             }
 
-            // Add stub to real GUID mappings
-            foreach (var mapping in stubToRealGuidMappings)
+            var createdDirectories = CreateDirectories(directoriesToCreate);
+            SyncOperationExecutor.ExecuteCopies(operations.Copies, forceImport);
+
+            if (stubToRealGuidMappings.Count > 0)
             {
-                // Add as a GUID mapping for the report to handle
-                string relativePath = mapping.StubPath.Replace(sourceDir, "").TrimStart('/', '\\');
-                initialReport.AddGuidMapping(relativePath, mapping.StubGuid, mapping.RealGuid);
+                var scriptRemapResults = CalculateScriptRemapOperations(sourceDir, operations.Copies, stubToRealGuidMappings);
+                operations.ScriptRemaps.AddRange(scriptRemapResults);
             }
 
-            GuidSyncReport fullReport;
-            if (result.SkippedFiles > 0)
+            if (operations.ScriptRemaps.Count > 0)
             {
-                Debug.Log($"Found {result.SkippedFiles} existing files - synchronizing GUIDs...");
-                fullReport = SynchronizeGuids(targetDir, sourceDir) ?? new GuidSyncReport();
-
-                foreach (var path in newFiles)
-                {
-                    fullReport.AddNewFile(path);
-                }
-
-                foreach (var path in skippedFiles)
-                {
-                    fullReport.AddSkippedFile(path);
-                }
-
-                foreach (var path in skippedDuplicateShaders)
-                {
-                    fullReport.AddDuplicateShader(path);
-                }
-
-                foreach (var (assemblyName, folderPath) in skippedAssemblyInfo)
-                {
-                    string unityRelativePath = folderPath.Replace(sourceDir, "").TrimStart('/', '\\');
-                    fullReport.AddDuplicateAssembly(assemblyName, unityRelativePath);
-                }
-
-                foreach (var mapping in stubToRealGuidMappings)
-                {
-                    string relativePath = mapping.StubPath.Replace(sourceDir, "").TrimStart('/', '\\');
-                    fullReport.AddGuidMapping(relativePath, mapping.StubGuid, mapping.RealGuid);
-                }
-            }
-            else
-            {
-                Debug.Log("All files are new - skipping GUID synchronization");
-                fullReport = initialReport;
+                ApplyScriptRemappings(targetDir, operations.ScriptRemaps);
             }
 
-            // Only copy files that aren't duplicate shaders
-            foreach (var filePath in filesToCopy)
-            {
-                string targetFilePath = filePath.Replace(sourceDir, targetDir);
-                bool targetExists = File.Exists(targetFilePath);
-                if (targetExists && !forceImport)
-                    continue;
+            var synchronizer = new GuidSynchronizer(targetDir, sourceDir);
+            synchronizer.Synchronize(operations, GuidSyncMode.Analyze);
 
-                File.Copy(filePath, targetFilePath, true);
-            }
+            var report = GuidSyncReport.CreateFromOperations(operations);
+
+            var applySynchronizer = new GuidSynchronizer(targetDir, sourceDir);
+            applySynchronizer.Synchronize(null, GuidSyncMode.Apply);
 
             CleanupEmptyDirectories(createdDirectories);
 
-            // Apply stub to real GUID mappings to imported files
-            List<ScriptGuidRemapping> scriptRemapResults = new List<ScriptGuidRemapping>();
-            if (stubToRealGuidMappings.Count > 0)
+            return new CopyResult
             {
-                scriptRemapResults = ApplyGuidRemappings(targetDir, sourceDir, stubToRealGuidMappings);
+                NewFiles = operations.NewFileCount,
+                SkippedFiles = operations.SkippedFileCount,
+                SyncReport = report
+            };
+        }
+
+        private static List<ScriptRemapOperation> CalculateScriptRemapOperations(
+            string sourceDir,
+            IEnumerable<CopyAssetOperation> copies,
+            List<ScriptUtils.ScriptMapping> stubMappings)
+        {
+            var results = new List<ScriptRemapOperation>();
+            if (copies == null)
+                return results;
+
+            if (stubMappings == null || stubMappings.Count == 0)
+                return results;
+
+            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mapping in stubMappings)
+            {
+                if (!string.IsNullOrEmpty(mapping.StubGuid))
+                {
+                    guidMap[mapping.StubGuid] = mapping;
+                }
             }
 
-            foreach (var remap in scriptRemapResults)
+            if (guidMap.Count == 0)
+                return results;
+
+            var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
+
+            foreach (var copy in copies)
             {
-                fullReport.AddScriptGuidRemapping(
-                    remap.TargetAssetPath,
-                    remap.ScriptType,
-                    remap.StubGuid,
-                    remap.RealGuid,
-                    remap.StubScriptPath,
-                    remap.RealScriptPath);
+                if (copy.IsMeta)
+                    continue;
+
+                if (string.IsNullOrEmpty(copy.TargetPath))
+                    continue;
+
+                if (!File.Exists(copy.TargetPath))
+                    continue;
+
+                var content = File.ReadAllText(copy.TargetPath);
+                if (string.IsNullOrEmpty(content))
+                    continue;
+
+                var recordedForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (Match match in guidRegex.Matches(content))
+                {
+                    string oldGuid = match.Groups[1].Value;
+                    if (!guidMap.TryGetValue(oldGuid, out var mapping))
+                        continue;
+
+                    var recordKey = $"{copy.UnityPath}|{mapping.StubGuid}|{mapping.RealGuid}";
+                    if (!recordedForFile.Add(recordKey))
+                        continue;
+
+                    var targetPath = copy.UnityPath;
+                    var realScriptPath = ConvertAbsoluteToUnityPath(mapping.RealPath, Application.dataPath);
+                    var stubScriptPath = ConvertAbsoluteToUnityPath(mapping.StubPath, sourceDir);
+
+                    results.Add(new ScriptRemapOperation
+                    {
+                        TargetAssetPath = targetPath,
+                        ScriptType = mapping.TypeName,
+                        StubGuid = mapping.StubGuid,
+                        RealGuid = mapping.RealGuid,
+                        StubScriptPath = stubScriptPath,
+                        RealScriptPath = realScriptPath
+                    });
+                }
             }
 
-            fullReport.FinalizeReport();
+            return results;
+        }
 
-            result.SyncReport = fullReport;
-            return result;
+        private static void ApplyScriptRemappings(string targetDir, IEnumerable<ScriptRemapOperation> remaps)
+        {
+            if (remaps == null)
+                return;
+
+            var remapList = remaps.ToList();
+            if (remapList.Count == 0)
+                return;
+
+            var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
+
+            foreach (var group in remapList.GroupBy(r => r.TargetAssetPath))
+            {
+                var unityPath = group.Key;
+                var absolutePath = ConvertUnityToAbsolutePath(unityPath, targetDir);
+                if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
+                    continue;
+
+                var replacements = new Dictionary<string, ScriptRemapOperation>(StringComparer.OrdinalIgnoreCase);
+                foreach (var remap in group)
+                {
+                    if (!replacements.ContainsKey(remap.StubGuid))
+                    {
+                        replacements[remap.StubGuid] = remap;
+                    }
+                }
+
+                string content = File.ReadAllText(absolutePath);
+                bool modified = false;
+                var logged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                string newContent = guidRegex.Replace(content, match =>
+                {
+                    var oldGuid = match.Groups[1].Value;
+                    if (!replacements.TryGetValue(oldGuid, out var remap))
+                        return match.Value;
+
+                    modified = true;
+                    var logKey = $"{unityPath}|{oldGuid}";
+                    if (logged.Add(logKey))
+                    {
+                        Debug.Log($"Remapping GUID in {Path.GetFileName(absolutePath)}: {oldGuid} -> {remap.RealGuid}");
+                    }
+                    return $"guid: {remap.RealGuid}";
+                });
+
+                if (modified)
+                {
+                    File.WriteAllText(absolutePath, newContent);
+                }
+            }
+        }
+
+        private static HashSet<string> CreateDirectories(IEnumerable<string> directories)
+        {
+            var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (directories == null)
+                return created;
+
+            foreach (var dir in directories)
+            {
+                if (string.IsNullOrEmpty(dir))
+                    continue;
+
+                var normalized = Path.GetFullPath(dir);
+                if (!Directory.Exists(normalized))
+                {
+                    Directory.CreateDirectory(normalized);
+                    created.Add(normalized);
+                }
+                else
+                {
+                    Directory.CreateDirectory(normalized);
+                }
+            }
+
+            return created;
+        }
+
+        private static string ConvertUnityToAbsolutePath(string unityPath, string assetsRoot)
+        {
+            if (string.IsNullOrEmpty(unityPath))
+                return unityPath;
+
+            if (Path.IsPathRooted(unityPath))
+                return unityPath;
+
+            string root = assetsRoot;
+            if (string.IsNullOrEmpty(root))
+            {
+                root = Application.dataPath;
+            }
+
+            root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            const string assetsPrefix = "Assets/";
+            if (unityPath.StartsWith(assetsPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var relative = unityPath.Substring(assetsPrefix.Length);
+                return Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            }
+
+            return Path.Combine(root, unityPath.Replace('/', Path.DirectorySeparatorChar));
         }
 
         private static string GetRelativePath(string basePath, string fullPath)
@@ -373,9 +482,9 @@ namespace DivineDragon
             return Path.GetFileName(fullPath);
         }
 
-        private static List<ScriptGuidRemapping> ApplyGuidRemappings(string targetDir, string sourceDir, List<ScriptUtils.ScriptMapping> mappings)
+        private static List<ScriptRemapOperation> ApplyGuidRemappings(string targetDir, string sourceDir, List<ScriptUtils.ScriptMapping> mappings)
         {
-            var remapResults = new List<ScriptGuidRemapping>();
+            var remapResults = new List<ScriptRemapOperation>();
             if (mappings.Count == 0)
                 return remapResults;
 
@@ -389,11 +498,8 @@ namespace DivineDragon
                 }
             }
 
-            // Find all files that might have references (prefabs, scenes, assets)
-            var filesToUpdate = new List<string>();
-            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.prefab", SearchOption.AllDirectories));
-            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.unity", SearchOption.AllDirectories));
-            filesToUpdate.AddRange(Directory.GetFiles(targetDir, "*.asset", SearchOption.AllDirectories));
+            // Find all files that might have references (be naive and scan everything)
+            var filesToUpdate = Directory.GetFiles(targetDir, "*", SearchOption.AllDirectories);
 
             var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
 
@@ -416,7 +522,7 @@ namespace DivineDragon
                         var recordKey = $"{targetPath}|{mapping.StubGuid}|{mapping.RealGuid}";
                         if (recordedForFile.Add(recordKey))
                         {
-                            remapResults.Add(new ScriptGuidRemapping
+                            remapResults.Add(new ScriptRemapOperation
                             {
                                 TargetAssetPath = targetPath,
                                 ScriptType = mapping.TypeName,
