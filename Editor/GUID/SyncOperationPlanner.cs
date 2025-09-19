@@ -26,7 +26,8 @@ namespace DivineDragon
             var allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
             foreach (var dirPath in allDirectories)
             {
-                string targetDirPath = dirPath.Replace(sourceDir, targetDir);
+                var relativeDir = UnityPathUtils.GetRelativePath(sourceDir, dirPath);
+                var targetDirPath = Path.Combine(targetDir, relativeDir);
                 plan.DirectoriesToCreate.Add(targetDirPath);
             }
 
@@ -68,8 +69,9 @@ namespace DivineDragon
                     continue;
 
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
-                string targetFilePath = filePath.Replace(sourceDir, targetDir);
-                string unityRelativeTarget = targetFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
+                var relativeFile = UnityPathUtils.GetRelativePath(sourceDir, filePath);
+                string targetFilePath = Path.Combine(targetDir, relativeFile);
+                string unityRelativeTarget = UnityPathUtils.FromAbsolute(targetFilePath);
 
                 bool isDuplicateShader = false;
 
@@ -175,7 +177,8 @@ namespace DivineDragon
 
             foreach (var (assemblyName, folderPath, reason) in skippedAssemblyInfo)
             {
-                string unityRelativePath = folderPath.Replace(sourceDir, "").TrimStart('/', '\\');
+                var relativeFolder = UnityPathUtils.GetRelativePath(sourceDir, folderPath);
+                string unityRelativePath = UnityPathUtils.NormalizeAssetPath(relativeFolder);
                 operations.Skips.Add(new SkipAssetOperation
                 {
                     UnityPath = unityRelativePath,

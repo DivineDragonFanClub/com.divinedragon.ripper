@@ -87,12 +87,6 @@ namespace DivineDragon
                         continue;
                     }
 
-                    var directory = Path.GetDirectoryName(copy.TargetPath);
-                    if (!string.IsNullOrEmpty(directory))
-                    {
-                        Directory.CreateDirectory(directory);
-                    }
-
                     File.Copy(copy.SourcePath, copy.TargetPath, true);
                 }
                 catch (Exception ex)
@@ -156,8 +150,8 @@ namespace DivineDragon
                         continue;
 
                     var targetPath = copy.UnityPath;
-                    var realScriptPath = ConvertAbsoluteToUnityPath(mapping.RealPath, Application.dataPath);
-                    var stubScriptPath = ConvertAbsoluteToUnityPath(mapping.StubPath, sourceDir);
+                    var realScriptPath = UnityPathUtils.FromAbsolute(mapping.RealPath, Application.dataPath);
+                    var stubScriptPath = UnityPathUtils.FromAbsolute(mapping.StubPath, sourceDir);
 
                     results.Add(new ScriptRemapOperation
                     {
@@ -183,7 +177,7 @@ namespace DivineDragon
             foreach (var group in remapList.GroupBy(r => r.TargetAssetPath))
             {
                 var unityPath = group.Key;
-                var absolutePath = ConvertUnityToAbsolutePath(unityPath, targetDir);
+                var absolutePath = UnityPathUtils.ToAbsolute(unityPath, targetDir);
                 if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
                     continue;
 
@@ -248,53 +242,5 @@ namespace DivineDragon
             }
         }
 
-        private static string ConvertUnityToAbsolutePath(string unityPath, string assetsRoot)
-        {
-            if (string.IsNullOrEmpty(unityPath))
-                return unityPath;
-
-            if (Path.IsPathRooted(unityPath))
-                return unityPath;
-
-            string root = assetsRoot;
-            if (string.IsNullOrEmpty(root))
-            {
-                root = Application.dataPath;
-            }
-
-            root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            const string assetsPrefix = "Assets/";
-            if (unityPath.StartsWith(assetsPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                var relative = unityPath.Substring(assetsPrefix.Length);
-                return Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
-            }
-
-            return Path.Combine(root, unityPath.Replace('/', Path.DirectorySeparatorChar));
-        }
-
-        private static string ConvertAbsoluteToUnityPath(string absolutePath, string assetsRoot)
-        {
-            if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(assetsRoot))
-            {
-                return absolutePath;
-            }
-
-            var normalizedPath = Path.GetFullPath(absolutePath).Replace('\\', '/');
-            var normalizedRoot = Path.GetFullPath(assetsRoot).Replace('\\', '/');
-
-            if (!normalizedRoot.EndsWith("/", StringComparison.Ordinal))
-            {
-                normalizedRoot += "/";
-            }
-
-            if (normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                return "Assets/" + normalizedPath.Substring(normalizedRoot.Length);
-            }
-
-            return normalizedPath;
-        }
     }
 }
