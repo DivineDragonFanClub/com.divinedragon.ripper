@@ -62,16 +62,18 @@ namespace DivineDragon
 
                 string projectAssetsPath = Application.dataPath;
 
-                var combinedResult = CopyAndCollect(sourceAssetsPath, projectAssetsPath, forceImport);
+                var syncReport = CopyAndCollect(sourceAssetsPath, projectAssetsPath, forceImport);
 
-                var syncReport = combinedResult.SyncReport;
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
                     EditorApplication.delayCall += () => GuidSyncReportWindow.ShowReport(syncReport);
                 }
 
-                Debug.Log($"Assets merged into project: {combinedResult.NewFiles} new files imported, {combinedResult.SkippedFiles} existing files skipped");
-                if (forceImport && combinedResult.SkippedFiles > 0)
+                var newFileCount = syncReport?.NewFilesImported.Count ?? 0;
+                var skippedCount = syncReport?.SkippedFiles.Count ?? 0;
+
+                Debug.Log($"Assets merged into project: {newFileCount} new files imported, {skippedCount} existing files skipped");
+                if (forceImport && skippedCount > 0)
                 {
                     Debug.Log("Force import enabled - all files were overwritten");
                 }
@@ -86,28 +88,14 @@ namespace DivineDragon
             }
         }
 
-        private class CopyResult
-        {
-            public int NewFiles;
-            public int SkippedFiles;
-            public GuidSyncReport SyncReport;
-        }
-
-        private static CopyResult CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
+        private static GuidSyncReport CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
         {
             var plan = SyncOperationPlanner.BuildPlan(sourceDir, targetDir, forceImport);
             var operations = plan.Operations;
 
             SyncOperationApplier.Apply(targetDir, sourceDir, operations, plan.DirectoriesToCreate, plan.StubScriptMappings, forceImport);
 
-            var report = GuidSyncReport.CreateFromOperations(operations);
-
-            return new CopyResult
-            {
-                NewFiles = operations.NewFileCount,
-                SkippedFiles = operations.SkippedFileCount,
-                SyncReport = report
-            };
+            return GuidSyncReport.CreateFromOperations(operations);
         }
 
     }
