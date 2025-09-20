@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using UnityEngine;
 
 // Type aliases for clarity
 using FilePath = System.String;
@@ -30,12 +29,10 @@ namespace DivineDragon
 
     public static class UnityPathUtils
     {
-        public static string FromAbsolute(string absolutePath, string assetsRoot = null)
+        public static string FromAbsolute(string absolutePath, string assetsRoot)
         {
             if (string.IsNullOrEmpty(absolutePath))
                 return absolutePath;
-
-            assetsRoot ??= Application.dataPath;
 
             var normalizedPath = Path.GetFullPath(absolutePath).Replace('\\', '/');
             var normalizedRoot = Path.GetFullPath(assetsRoot).Replace('\\', '/');
@@ -54,15 +51,13 @@ namespace DivineDragon
             return normalizedPath;
         }
 
-        public static string ToAbsolute(string unityPath, string assetsRoot = null)
+        public static string ToAbsolute(string unityPath, string assetsRoot)
         {
             if (string.IsNullOrEmpty(unityPath))
                 return unityPath;
 
             if (Path.IsPathRooted(unityPath))
                 return unityPath;
-
-            assetsRoot ??= Application.dataPath;
 
             var normalizedRoot = Path.GetFullPath(assetsRoot);
             var normalizedUnity = NormalizeAssetPath(unityPath);

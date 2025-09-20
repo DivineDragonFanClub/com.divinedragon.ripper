@@ -71,7 +71,7 @@ namespace DivineDragon
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
                 var relativeFile = UnityPathUtils.GetRelativePath(sourceDir, filePath);
                 string targetFilePath = Path.Combine(targetDir, relativeFile);
-                string unityRelativeTarget = UnityPathUtils.FromAbsolute(targetFilePath);
+                string unityRelativeTarget = UnityPathUtils.FromAbsolute(targetFilePath, targetDir);
 
                 bool isDuplicateShader = false;
 

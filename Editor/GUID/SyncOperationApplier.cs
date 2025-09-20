@@ -26,7 +26,7 @@ namespace DivineDragon
             var createdDirectories = EnsureDirectories(directoriesToCreate);
             ExecuteCopies(operations.Copies, forceImport);
 
-            var scriptRemaps = ComputeScriptRemapOperations(sourceDir, operations.Copies, stubMappings);
+            var scriptRemaps = ComputeScriptRemapOperations(sourceDir, targetDir, operations.Copies, stubMappings);
             if (scriptRemaps.Count > 0)
             {
                 operations.ScriptRemaps.AddRange(scriptRemaps);
@@ -99,6 +99,7 @@ namespace DivineDragon
 
         private static List<ScriptRemapOperation> ComputeScriptRemapOperations(
             string sourceDir,
+            string targetDir,
             IEnumerable<CopyAssetOperation> copies,
             IEnumerable<ScriptUtils.ScriptMapping> stubMappings)
         {
@@ -150,7 +151,7 @@ namespace DivineDragon
                         continue;
 
                     var targetPath = copy.UnityPath;
-                    var realScriptPath = UnityPathUtils.FromAbsolute(mapping.RealPath, Application.dataPath);
+                    var realScriptPath = UnityPathUtils.FromAbsolute(mapping.RealPath, targetDir);
                     var stubScriptPath = UnityPathUtils.FromAbsolute(mapping.StubPath, sourceDir);
 
                     results.Add(new ScriptRemapOperation
