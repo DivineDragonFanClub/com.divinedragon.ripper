@@ -14,7 +14,7 @@ namespace DivineDragon
 
     public class Rip
     {
-        public static bool RunAssetRipper(string assetRipperPath, string inputPath, string outputPath, InputMode mode, bool forceImport = false)
+        public static bool RunAssetRipper(string assetRipperPath, string inputPath, string outputPath, InputMode mode)
         {
             using (AssetRipperRunner ripperRunner = new AssetRipperRunner(assetRipperPath))
             {
@@ -43,19 +43,19 @@ namespace DivineDragon
             }
         }
 
-        public static bool ExtractAssets(string assetRipperPath, string inputPath, string outputPath, InputMode mode, bool forceImport = false)
+        public static bool ExtractAssets(string assetRipperPath, string inputPath, string outputPath, InputMode mode)
         {
-            bool exportSucceeded = RunAssetRipper(assetRipperPath, inputPath, outputPath, mode, forceImport);
+            bool exportSucceeded = RunAssetRipper(assetRipperPath, inputPath, outputPath, mode);
             if (!exportSucceeded)
             {
                 return false;
             }
 
-            bool mergeSucceeded = MergeExtractedAssets(outputPath, forceImport);
+            bool mergeSucceeded = MergeExtractedAssets(outputPath);
             return mergeSucceeded;
         }
 
-        private static bool MergeExtractedAssets(string ripperOutputPath, bool forceImport)
+        private static bool MergeExtractedAssets(string ripperOutputPath)
         {
             try
             {
@@ -69,10 +69,10 @@ namespace DivineDragon
 
                 string projectAssetsPath = Application.dataPath;
 
-                var plan = SyncOperationPlanner.BuildPlan(sourceAssetsPath, projectAssetsPath, forceImport);
+                var plan = SyncOperationPlanner.BuildPlan(sourceAssetsPath, projectAssetsPath);
                 var operations = plan.Operations;
 
-                SyncOperationRunner.Run(projectAssetsPath, sourceAssetsPath, operations, plan.DirectoriesToCreate, plan.StubScriptMappings, forceImport);
+                SyncOperationRunner.Run(projectAssetsPath, sourceAssetsPath, operations, plan.DirectoriesToCreate, plan.StubScriptMappings);
 
                 var syncReport = GuidSyncReport.CreateFromOperations(operations);
 
@@ -85,11 +85,6 @@ namespace DivineDragon
                 var skippedCount = syncReport?.SkippedFiles.Count ?? 0;
 
                 Debug.Log($"Assets merged into project: {newFileCount} new files imported, {skippedCount} existing files skipped");
-                if (forceImport && skippedCount > 0)
-                {
-                    Debug.Log("Force import enabled - all files were overwritten");
-                }
-
                 AssetDatabase.Refresh();
                 return true;
             }

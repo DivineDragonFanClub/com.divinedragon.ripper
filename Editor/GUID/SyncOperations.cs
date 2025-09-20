@@ -13,15 +13,20 @@ namespace DivineDragon
         Other
     }
 
+    public enum FileType
+    {
+        Asset,
+        Meta
+    }
+
     [Serializable]
     public class CopyAssetOperation
     {
         public string SourcePath { get; set; }
         public string TargetPath { get; set; }
         public string UnityPath { get; set; }
-        public bool Overwrite { get; set; }
         public bool IsNew { get; set; }
-        public bool IsMeta { get; set; }
+        public FileType Kind { get; set; }
     }
 
     [Serializable]
@@ -87,7 +92,7 @@ namespace DivineDragon
         public List<ScriptRemapOperation> ScriptRemaps { get; } = new List<ScriptRemapOperation>();
 
         public int NewFileCount => Copies
-            .Where(c => c.IsNew && !c.IsMeta)
+            .Where(c => c.IsNew && c.Kind == FileType.Asset)
             .Select(c => c.UnityPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();

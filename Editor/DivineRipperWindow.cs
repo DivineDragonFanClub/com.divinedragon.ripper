@@ -89,8 +89,7 @@ namespace DivineDragon
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
                     exportPath,
-                    InputMode.File,
-                    false);
+                    InputMode.File);
 
                 if (success)
                 {
@@ -151,8 +150,7 @@ namespace DivineDragon
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
                     exportPath,
-                    InputMode.Folder,
-                    false);
+                    InputMode.Folder);
 
                 if (success)
                 {

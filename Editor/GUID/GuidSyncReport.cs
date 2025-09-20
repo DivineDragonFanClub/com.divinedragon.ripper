@@ -143,7 +143,7 @@ namespace DivineDragon
         private void Populate()
         {
             NewFilesImported = Operations.Copies
-                .Where(c => c.IsNew && !c.IsMeta)
+                .Where(c => c.IsNew && c.Kind == FileType.Asset)
                 .Select(c => c.UnityPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)

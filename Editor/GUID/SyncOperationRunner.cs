@@ -16,15 +16,14 @@ namespace DivineDragon
             string sourceDir,
             SyncOperations operations,
             IEnumerable<string> directoriesToCreate,
-            IEnumerable<ScriptUtils.ScriptMapping> stubMappings,
-            bool forceImport)
+            IEnumerable<ScriptUtils.ScriptMapping> stubMappings)
         {
             if (operations == null) throw new ArgumentNullException(nameof(operations));
             if (string.IsNullOrEmpty(targetDir)) throw new ArgumentException("Target directory is required", nameof(targetDir));
             if (string.IsNullOrEmpty(sourceDir)) throw new ArgumentException("Source directory is required", nameof(sourceDir));
 
             var createdDirectories = EnsureDirectories(directoriesToCreate);
-            ExecuteCopies(operations.Copies, forceImport);
+            ExecuteCopies(operations.Copies);
 
             var scriptRemaps = ComputeScriptRemapOperations(sourceDir, targetDir, operations.Copies, stubMappings);
             if (scriptRemaps.Count > 0)
@@ -71,7 +70,7 @@ namespace DivineDragon
             return created;
         }
 
-        private static void ExecuteCopies(IEnumerable<CopyAssetOperation> copies, bool forceImport)
+        private static void ExecuteCopies(IEnumerable<CopyAssetOperation> copies)
         {
             if (copies == null)
             {
@@ -82,11 +81,6 @@ namespace DivineDragon
             {
                 try
                 {
-                    if (!forceImport && File.Exists(copy.TargetPath))
-                    {
-                        continue;
-                    }
-
                     File.Copy(copy.SourcePath, copy.TargetPath, true);
                 }
                 catch (Exception ex)
@@ -128,7 +122,7 @@ namespace DivineDragon
 
             foreach (var copy in copies)
             {
-                if (copy.IsMeta)
+                if (copy.Kind == FileType.Meta)
                     continue;
 
                 if (string.IsNullOrEmpty(copy.TargetPath) || !File.Exists(copy.TargetPath))
