@@ -7,11 +7,11 @@ using UnityEngine;
 
 namespace DivineDragon
 {
-    public static class SyncOperationApplier
+    public static class SyncOperationRunner
     {
         private static readonly Regex GuidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
 
-        public static void Apply(
+        public static void Run(
             string targetDir,
             string sourceDir,
             SyncOperations operations,

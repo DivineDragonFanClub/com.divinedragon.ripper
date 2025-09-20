@@ -39,16 +39,23 @@ namespace DivineDragon
                 success = ripperRunner.ExportProject(outputPath);
                 Debug.Log($"Export success: {success}");
 
-                if (success)
-                {
-                    success = CopyExtractedAssets(outputPath, forceImport);
-                }
-
                 return success;
             }
         }
 
-        private static bool CopyExtractedAssets(string ripperOutputPath, bool forceImport)
+        public static bool ExtractAssets(string assetRipperPath, string inputPath, string outputPath, InputMode mode, bool forceImport = false)
+        {
+            bool exportSucceeded = RunAssetRipper(assetRipperPath, inputPath, outputPath, mode, forceImport);
+            if (!exportSucceeded)
+            {
+                return false;
+            }
+
+            bool mergeSucceeded = MergeExtractedAssets(outputPath, forceImport);
+            return mergeSucceeded;
+        }
+
+        private static bool MergeExtractedAssets(string ripperOutputPath, bool forceImport)
         {
             try
             {
@@ -62,7 +69,12 @@ namespace DivineDragon
 
                 string projectAssetsPath = Application.dataPath;
 
-                var syncReport = CopyAndCollect(sourceAssetsPath, projectAssetsPath, forceImport);
+                var plan = SyncOperationPlanner.BuildPlan(sourceAssetsPath, projectAssetsPath, forceImport);
+                var operations = plan.Operations;
+
+                SyncOperationRunner.Run(projectAssetsPath, sourceAssetsPath, operations, plan.DirectoriesToCreate, plan.StubScriptMappings, forceImport);
+
+                var syncReport = GuidSyncReport.CreateFromOperations(operations);
 
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
@@ -86,16 +98,6 @@ namespace DivineDragon
                 Debug.LogError($"Failed to copy extracted assets: {ex.Message}");
                 return false;
             }
-        }
-
-        private static GuidSyncReport CopyAndCollect(string sourceDir, string targetDir, bool forceImport)
-        {
-            var plan = SyncOperationPlanner.BuildPlan(sourceDir, targetDir, forceImport);
-            var operations = plan.Operations;
-
-            SyncOperationApplier.Apply(targetDir, sourceDir, operations, plan.DirectoriesToCreate, plan.StubScriptMappings, forceImport);
-
-            return GuidSyncReport.CreateFromOperations(operations);
         }
 
     }

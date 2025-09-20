@@ -85,7 +85,7 @@ namespace DivineDragon
 
             try
             {
-                bool success = Rip.RunAssetRipper(
+                bool success = Rip.ExtractAssets(
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
                     exportPath,
@@ -147,7 +147,7 @@ namespace DivineDragon
 
             try
             {
-                bool success = Rip.RunAssetRipper(
+                bool success = Rip.ExtractAssets(
                     EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""),
                     path,
                     exportPath,
