@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 namespace DivineDragon
@@ -15,6 +16,8 @@ namespace DivineDragon
 
     public static class SyncOperationPlanner
     {
+        private static readonly Regex GuidReferenceRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static SyncPlan BuildPlan(string sourceDir, string targetDir)
         {
             if (string.IsNullOrEmpty(sourceDir)) throw new ArgumentException("Source directory is required", nameof(sourceDir));
@@ -40,13 +43,20 @@ namespace DivineDragon
 
             IdentifyAssemblyConflicts(plan, allFiles, existingAssemblyNames, skipFolders, skippedAssemblyInfo);
 
+            var relocationOverrides = BuildPrivateDependencyOverrides(sourceDir, allFiles, skipFolders);
+            RegisterRelocatedDirectories(plan, relocationOverrides, targetDir);
+
             foreach (var filePath in allFiles)
             {
                 if (skipFolders.Any(skipFolder => AssemblyUtils.IsPathInFolder(filePath, skipFolder)))
                     continue;
 
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
-                var relativeFile = UnityPathUtils.GetRelativePath(sourceDir, filePath);
+                var relativeFile = NormalizeRelativePath(UnityPathUtils.GetRelativePath(sourceDir, filePath));
+                if (relocationOverrides.TryGetValue(relativeFile, out var relocatedRelative))
+                {
+                    relativeFile = relocatedRelative;
+                }
                 string targetFilePath = Path.Combine(targetDir, relativeFile);
                 string unityRelativeTarget = UnityPathUtils.FromAbsolute(targetFilePath, targetDir);
 
@@ -76,6 +86,302 @@ namespace DivineDragon
             RecordAssemblySkips(plan, sourceDir, skippedAssemblyInfo);
 
             return plan;
+        }
+
+        private static Dictionary<string, string> BuildPrivateDependencyOverrides(
+            string sourceDir,
+            IEnumerable<string> allFiles,
+            HashSet<string> skipFolders)
+        {
+            var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (allFiles == null)
+                return overrides;
+
+            var guidToUnityPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var unityToRelative = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var unityMetaToRelative = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var unityToAbsolute = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var assetFiles = new List<(string filePath, string unityPath)>();
+
+            foreach (var file in allFiles)
+            {
+                if (string.IsNullOrEmpty(file))
+                    continue;
+
+                if (IsInSkippedFolder(file, skipFolders))
+                    continue;
+
+                var unityPath = UnityPathUtils.FromAbsolute(file, sourceDir);
+                var relativePath = NormalizeRelativePath(UnityPathUtils.GetRelativePath(sourceDir, file));
+
+                if (MetaFileParser.IsMetaFile(file))
+                {
+                    unityMetaToRelative[unityPath] = relativePath;
+
+                    if (MetaFileParser.TryGetGuid(file, out var guid))
+                    {
+                        var assetFile = file.Substring(0, file.Length - 5);
+                        if (File.Exists(assetFile))
+                        {
+                            var assetUnity = UnityPathUtils.FromAbsolute(assetFile, sourceDir);
+                            guidToUnityPath[guid] = assetUnity;
+                        }
+                    }
+                }
+                else
+                {
+                    unityToRelative[unityPath] = relativePath;
+                    unityToAbsolute[unityPath] = file;
+                    assetFiles.Add((file, unityPath));
+                }
+            }
+
+            var dependencyGraph = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (filePath, unityPath) in assetFiles)
+            {
+                if (IsInSkippedFolder(filePath, skipFolders))
+                    continue;
+
+                if (!UnityFileUtils.IsUnityYamlFile(filePath))
+                    continue;
+
+                string content;
+                try
+                {
+                    content = File.ReadAllText(filePath);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (Match match in GuidReferenceRegex.Matches(content))
+                {
+                    if (!match.Success || match.Groups.Count < 2)
+                        continue;
+
+                    var referencedGuid = match.Groups[1].Value;
+                    if (!guidToUnityPath.TryGetValue(referencedGuid, out var dependencyUnityPath))
+                        continue;
+
+                    if (string.Equals(dependencyUnityPath, unityPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (!dependencyGraph.TryGetValue(unityPath, out var list))
+                    {
+                        list = new List<string>();
+                        dependencyGraph[unityPath] = list;
+                    }
+
+                    if (!list.Any(path => string.Equals(path, dependencyUnityPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        list.Add(dependencyUnityPath);
+                    }
+                }
+            }
+
+            var visitedShare = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queuedPrivate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queue = new Queue<(string assetUnity, string baseFolder)>();
+
+            foreach (var assetUnity in unityToRelative.Keys)
+            {
+                if (!IsShareUnityPath(assetUnity))
+                    continue;
+
+                var baseFolder = GetDependencyBucket(assetUnity);
+                if (string.IsNullOrEmpty(baseFolder))
+                    continue;
+
+                if (visitedShare.Add(assetUnity))
+                {
+                    queue.Enqueue((assetUnity, baseFolder));
+                }
+            }
+
+            while (queue.Count > 0)
+            {
+                var (currentUnity, baseFolder) = queue.Dequeue();
+                if (!dependencyGraph.TryGetValue(currentUnity, out var dependencies))
+                    continue;
+
+                foreach (var dependencyUnity in dependencies)
+                {
+                    if (IsShareUnityPath(dependencyUnity))
+                    {
+                        var shareBase = GetDependencyBucket(dependencyUnity);
+                        if (!string.IsNullOrEmpty(shareBase) && visitedShare.Add(dependencyUnity))
+                        {
+                            queue.Enqueue((dependencyUnity, shareBase));
+                        }
+                        continue;
+                    }
+
+                    if (!unityToRelative.TryGetValue(dependencyUnity, out var dependencyRelative))
+                        continue;
+
+                    if (unityToAbsolute.TryGetValue(dependencyUnity, out var dependencyAbsolute) && IsInSkippedFolder(dependencyAbsolute, skipFolders))
+                        continue;
+
+                    var relocatedUnity = ComputeRelocatedUnityPath(baseFolder, dependencyUnity);
+                    if (string.IsNullOrEmpty(relocatedUnity) || string.Equals(relocatedUnity, dependencyUnity, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var relocatedRelative = UnityToRelativePath(relocatedUnity);
+                    if (string.IsNullOrEmpty(relocatedRelative))
+                        continue;
+
+                    if (!overrides.TryGetValue(dependencyRelative, out var existingRelative))
+                    {
+                        overrides[dependencyRelative] = relocatedRelative;
+                    }
+                    else if (!PathEquals(existingRelative, relocatedRelative))
+                    {
+                        continue;
+                    }
+
+                    if (unityMetaToRelative.TryGetValue(dependencyUnity + ".meta", out var dependencyMetaRelative))
+                    {
+                        var relocatedMetaRelative = relocatedRelative + ".meta";
+                        if (!overrides.TryGetValue(dependencyMetaRelative, out var existingMetaRelative))
+                        {
+                            overrides[dependencyMetaRelative] = relocatedMetaRelative;
+                        }
+                        else if (!PathEquals(existingMetaRelative, relocatedMetaRelative))
+                        {
+                            continue;
+                        }
+                    }
+
+                    if (queuedPrivate.Add(dependencyUnity))
+                    {
+                        queue.Enqueue((dependencyUnity, baseFolder));
+                    }
+                }
+            }
+
+            return overrides;
+        }
+
+        private static void RegisterRelocatedDirectories(SyncPlan plan, Dictionary<string, string> overrides, string targetDir)
+        {
+            if (overrides == null || overrides.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var relocated in overrides.Values)
+            {
+                if (string.IsNullOrEmpty(relocated))
+                {
+                    continue;
+                }
+
+                var directory = Path.GetDirectoryName(relocated);
+                if (string.IsNullOrEmpty(directory))
+                {
+                    continue;
+                }
+
+                var absolute = Path.Combine(targetDir, directory);
+                plan.DirectoriesToCreate.Add(absolute);
+            }
+        }
+
+        private static string ComputeRelocatedUnityPath(string baseFolderUnity, string dependencyUnityPath)
+        {
+            if (string.IsNullOrEmpty(baseFolderUnity))
+                return dependencyUnityPath;
+
+            var normalizedBase = UnityPathUtils.NormalizeAssetPath(baseFolderUnity);
+            if (!normalizedBase.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return dependencyUnityPath;
+
+            var normalizedDependency = UnityPathUtils.NormalizeAssetPath(dependencyUnityPath);
+            if (!normalizedDependency.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) || normalizedDependency.Length <= 7)
+                return dependencyUnityPath;
+
+            var relativeToAssets = normalizedDependency.Substring(7);
+            var relocated = $"{normalizedBase}/{relativeToAssets}";
+            return UnityPathUtils.NormalizeAssetPath(relocated);
+        }
+
+        private static string GetDependencyBucket(string unityPath)
+        {
+            if (string.IsNullOrEmpty(unityPath))
+                return null;
+
+            var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
+            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var lastSlash = normalized.LastIndexOf('/');
+            var lastDot = normalized.LastIndexOf('.');
+
+            if (lastDot > lastSlash)
+            {
+                normalized = normalized.Substring(0, lastDot);
+            }
+
+            return normalized;
+        }
+
+        private static bool IsShareUnityPath(string unityPath)
+        {
+            return !string.IsNullOrEmpty(unityPath) && unityPath.StartsWith("Assets/Share/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string UnityToRelativePath(string unityPath)
+        {
+            if (string.IsNullOrEmpty(unityPath))
+            {
+                return unityPath;
+            }
+
+            var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
+            if (string.Equals(normalized, "Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            if (normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) && normalized.Length > 7)
+            {
+                var trimmed = normalized.Substring(7);
+                return NormalizeRelativePath(trimmed);
+            }
+
+            return NormalizeRelativePath(normalized);
+        }
+
+        private static string NormalizeRelativePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+
+            var normalized = path.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            return normalized.TrimStart(Path.DirectorySeparatorChar);
+        }
+
+        private static bool PathEquals(string left, string right)
+        {
+            return string.Equals(NormalizeRelativePath(left), NormalizeRelativePath(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsInSkippedFolder(string path, HashSet<string> skipFolders)
+        {
+            if (skipFolders == null || skipFolders.Count == 0 || string.IsNullOrEmpty(path))
+                return false;
+
+            foreach (var folder in skipFolders)
+            {
+                if (AssemblyUtils.IsPathInFolder(path, folder))
+                    return true;
+            }
+
+            return false;
         }
 
         private static void IdentifyAssemblyConflicts(
