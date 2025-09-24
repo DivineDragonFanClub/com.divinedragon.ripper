@@ -22,65 +22,6 @@ namespace DivineDragon
         {
             return EditorPrefs.GetString(PreviousExportPathKey, string.Empty);
         }
-        
-        // Validator for ExtractBundle
-        [MenuItem("Divine Dragon/Divine Ripper/Extract a bundle", true)]
-        private static bool ValidateExtractBundle()
-        {
-            // Disable the MenuItem if the user hasn't provided the path to AssetRipper
-            return !string.IsNullOrEmpty(EditorPrefs.GetString(DivineRipperSettingsProvider.AssetRipperPathKey, ""));
-        }
-        
-        [MenuItem("Divine Dragon/Divine Ripper/Extract a bundle", false, 1400)]
-        public static void ExtractBundle()
-        {
-            string directory = "";
-
-            string path = EditorUtility.OpenFilePanel(
-                "Select bundle file to extract",
-                directory,
-                "bundle"
-            );
-
-            if (string.IsNullOrEmpty(path))
-                return;
-
-            
-
-            EditorUtility.DisplayProgressBar("AssetRipper", "Starting AssetRipper...", 0.1f);
-
-            try
-            {
-                bool success = Rip.ExtractAssets(
-                    path,
-                    InputMode.File);
-
-                if (success)
-                {
-                    EditorUtility.DisplayDialog("Success",
-                        $"Assets extracted successfully.",
-                        "OK");
-                }
-                else
-                {
-                    EditorUtility.DisplayDialog("Error",
-                        "Failed to extract assets. Check the console for details.",
-                        "OK");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"Error running AssetRipper: {ex.Message}");
-
-                EditorUtility.DisplayDialog("Error",
-                    $"Error running AssetRipper:\n{ex.Message}",
-                    "OK");
-            }
-            finally
-            {
-                EditorUtility.ClearProgressBar();
-            }
-        }
 
         // Commented out because if things work as they should, you wouldn't need to gather and load a folder to begin with.
         // Worth re-enabling if maps prove to be too complex to support for now.
@@ -147,7 +88,7 @@ namespace DivineDragon
         
         #endregion
         
-        [MenuItem("Divine Dragon/Divine Ripper/Settings", false, 1402)]
+        [MenuItem("Divine Dragon/Dumper/Settings", false, 1402)]
         public static void ShowDivineRipperSettings()
         {
             SettingsService.OpenProjectSettings("Project/Divine Dragon/Divine Ripper Settings");
