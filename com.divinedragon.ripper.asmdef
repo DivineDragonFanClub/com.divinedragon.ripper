@@ -1,9 +1,11 @@
 {
     "name": "DivineRipper",
     "rootNamespace": "DivineDragon",
-    "references": [],
+    "references": [
+        "GUID:332f144202c5345808e8db28bf958969"
+    ],
     "includePlatforms": [
-      "Editor"
+        "Editor"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

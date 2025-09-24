@@ -28,6 +28,12 @@ namespace DivineDragon
                 Debug.Log("AssetRipper is already running?");
                 return;
             }
+
+            if (string.IsNullOrEmpty(executablePath))
+            {
+                Debug.LogError("AssetRipper executablePath is null or empty");
+                return;
+            }
             
             // Start the process while the class instance is running
             _processThread = new Thread(() =>
