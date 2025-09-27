@@ -16,6 +16,7 @@ namespace DivineDragon
 
     public static class SyncOperationPlanner
     {
+        internal const string PrivateFolderSuffix = "_Resources";
         private static readonly Regex GuidReferenceRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static SyncPlan BuildPlan(string sourceDir, string targetDir)
@@ -322,6 +323,11 @@ namespace DivineDragon
             if (lastDot > lastSlash)
             {
                 normalized = normalized.Substring(0, lastDot);
+            }
+
+            if (!normalized.EndsWith(PrivateFolderSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = string.Concat(normalized, PrivateFolderSuffix);
             }
 
             return normalized;
