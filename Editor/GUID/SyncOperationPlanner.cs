@@ -17,6 +17,7 @@ namespace DivineDragon
     public static class SyncOperationPlanner
     {
         internal const string PrivateFolderSuffix = "_Resources";
+        internal const string SharedScriptsRoot = "Assets/Scripts";
         private static readonly Regex GuidReferenceRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static SyncPlan BuildPlan(string sourceDir, string targetDir)
@@ -226,6 +227,7 @@ namespace DivineDragon
                         continue;
 
                     var relocatedUnity = ComputeRelocatedUnityPath(baseFolder, dependencyUnity);
+                    relocatedUnity = ApplySpecialRelocations(dependencyUnity, relocatedUnity);
                     if (string.IsNullOrEmpty(relocatedUnity) || string.Equals(relocatedUnity, dependencyUnity, StringComparison.OrdinalIgnoreCase))
                         continue;
 
@@ -306,6 +308,45 @@ namespace DivineDragon
             var relativeToAssets = normalizedDependency.Substring(7);
             var relocated = $"{normalizedBase}/{relativeToAssets}";
             return UnityPathUtils.NormalizeAssetPath(relocated);
+        }
+
+        private static string ApplySpecialRelocations(string dependencyUnityPath, string computedRelocatedUnity)
+        {
+            if (string.IsNullOrEmpty(dependencyUnityPath))
+            {
+                return computedRelocatedUnity;
+            }
+
+            var normalizedDependency = UnityPathUtils.NormalizeAssetPath(dependencyUnityPath);
+
+            if (IsScriptsPath(normalizedDependency))
+            {
+                return normalizedDependency;
+            }
+
+            // More in the future?
+
+            return computedRelocatedUnity;
+        }
+
+        private static bool IsScriptsPath(string unityPath)
+        {
+            if (string.IsNullOrEmpty(unityPath))
+            {
+                return false;
+            }
+
+            if (string.Equals(unityPath, SharedScriptsRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (unityPath.StartsWith(SharedScriptsRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private static string GetDependencyBucket(string unityPath)

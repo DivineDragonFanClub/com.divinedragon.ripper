@@ -205,7 +205,7 @@ namespace DivineDragon
         {
             _guidMappings.Clear();
 
-            var mainMetaFiles = ScanMetaFiles(_mainProjectPath);
+            var mainMetaFiles = ScanMetaFiles(_mainProjectPath, skipSharePrivate: true);
             var subordinateMetaFiles = ScanMetaFiles(_subordinateProjectPath);
 
             foreach (var kvp in mainMetaFiles)
@@ -251,7 +251,7 @@ namespace DivineDragon
             return Path.Combine(trimmed, "Assets");
         }
 
-        private Dictionary<RelativePath, (Guid guid, FileID? fileId)> ScanMetaFiles(DirectoryPath projectPath)
+        private Dictionary<RelativePath, (Guid guid, FileID? fileId)> ScanMetaFiles(DirectoryPath projectPath, bool skipSharePrivate = false)
         {
             var metaFiles = new Dictionary<RelativePath, (Guid, FileID?)>();
 
@@ -271,6 +271,11 @@ namespace DivineDragon
 
             foreach (var filePath in Directory.GetFiles(assetsPath, "*.meta", SearchOption.AllDirectories))
             {
+                if (skipSharePrivate && IsSharePrivatePath(filePath, assetsPath))
+                {
+                    continue;
+                }
+
                 if (MetaFileParser.TryGetGuidAndMainFileId(filePath, out var guid, out var fileId))
                 {
                     var relativePath = GetRelativePath(assetsPath, filePath);
@@ -339,6 +344,45 @@ namespace DivineDragon
                 ? relativePath.Substring(0, relativePath.Length - metaExtension.Length)
                 : relativePath;
         }
+
+        private static bool IsSharePrivatePath(string absolutePath, string assetsRoot)
+        {
+            if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(assetsRoot))
+            {
+                return false;
+            }
+
+            var unityPath = UnityPathUtils.FromAbsolute(absolutePath, assetsRoot);
+            return IsSharePrivateUnityPath(unityPath);
+        }
+
+        private static bool IsSharePrivateUnityPath(string unityPath)
+        {
+            if (string.IsNullOrEmpty(unityPath))
+            {
+                return false;
+            }
+
+            var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
+            if (!normalized.StartsWith("Assets/Share/", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Check for private folder segments or their meta files
+            if (normalized.IndexOf("/" + SyncOperationPlanner.PrivateFolderSuffix + "/", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            if (normalized.EndsWith(SyncOperationPlanner.PrivateFolderSuffix + ".meta", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
         private RelativePath GetRelativePath(DirectoryPath basePath, FilePath fullPath)
         {
             var baseUri = new Uri(basePath.EndsWith(Path.DirectorySeparatorChar.ToString())
