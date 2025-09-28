@@ -86,7 +86,8 @@ namespace DivineDragon
 
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
-                    EditorApplication.delayCall += () => GuidSyncReportWindow.ShowReport(syncReport);
+                    var reportDirectory = ripperOutputPath;
+                    EditorApplication.delayCall += () => GuidSyncReportWindow.ShowReport(syncReport, reportDirectory);
                 }
 
                 var newFileCount = syncReport?.NewFilesImported.Count ?? 0;

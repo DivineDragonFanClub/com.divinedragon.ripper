@@ -81,6 +81,12 @@ namespace DivineDragon
             public List<string> skippedFiles;
             public List<GuidMappingJson> uuidMappings;
             public List<ScriptRemapJson> scriptGuidRemappings;
+            public List<string> duplicateShaders;
+            public List<AssemblySkipInfoJson> duplicateAssemblies;
+            public List<FileIdRemapJson> fileIdRemappings;
+            public List<FileDependencyJson> fileDependencies;
+            public string summary;
+            public string operationsJson;
         }
 
         [Serializable]
@@ -107,7 +113,6 @@ namespace DivineDragon
             public string assetName;
             public Guid oldGuid;
             public Guid newGuid;
-            public List<FileIdRemapJson> fileIdRemappings;
         }
 
         [Serializable]
@@ -117,6 +122,20 @@ namespace DivineDragon
             public string filePath;
             public long oldFileId;
             public long newFileId;
+        }
+
+        [Serializable]
+        private class AssemblySkipInfoJson
+        {
+            public string assemblyName;
+            public string folderPath;
+        }
+
+        [Serializable]
+        private class FileDependencyJson
+        {
+            public string filePath;
+            public List<DependencyJson> dependencies;
         }
 
         [Serializable]
@@ -138,6 +157,198 @@ namespace DivineDragon
             };
             report.Populate();
             return report;
+        }
+
+        public static GuidSyncReport FromJson(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return null;
+            }
+
+            ReportJsonPayload payload;
+            try
+            {
+                payload = JsonUtility.FromJson<ReportJsonPayload>(json);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to parse GUID sync report JSON: {ex.Message}");
+                return null;
+            }
+
+            if (payload == null)
+            {
+                return null;
+            }
+
+            var report = new GuidSyncReport
+            {
+                Operations = new SyncOperations()
+            };
+
+            report.NewFilesImported = payload.newFiles?
+                .Select(n => n?.filePath)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<FilePath>();
+
+            report.SkippedFiles = payload.skippedFiles?
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<FilePath>();
+
+            report.DuplicateShaders = payload.duplicateShaders?
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<FilePath>();
+
+            report.DuplicateAssemblies = payload.duplicateAssemblies?
+                .Select(a => new AssemblySkipInfo
+                {
+                    AssemblyName = a?.assemblyName,
+                    FolderPath = a?.folderPath
+                })
+                .Where(a => a != null && !string.IsNullOrEmpty(a.FolderPath))
+                .OrderBy(a => a.FolderPath, StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<AssemblySkipInfo>();
+
+            report.Mappings = payload.uuidMappings?
+                .Select(m => new GuidMapping
+                {
+                    AssetPath = m?.assetPath,
+                    AssetName = m?.assetName,
+                    OldGuid = m?.oldGuid,
+                    NewGuid = m?.newGuid
+                })
+                .Where(m => m != null && !string.IsNullOrEmpty(m.AssetPath))
+                .OrderBy(m => m.AssetName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<GuidMapping>();
+
+            report.FileIdRemappings = payload.fileIdRemappings?
+                .Select(f => new FileIdRemapping
+                {
+                    FileGuid = f.fileGuid,
+                    FilePath = f.filePath,
+                    OldFileId = f.oldFileId,
+                    NewFileId = f.newFileId
+                })
+                .Where(f => !string.IsNullOrEmpty(f.FilePath))
+                .ToList() ?? new List<FileIdRemapping>();
+
+            report.ScriptGuidRemappings = payload.scriptGuidRemappings?
+                .Select(s => new ScriptGuidRemapping
+                {
+                    TargetAssetPath = s.assetPath,
+                    ScriptType = s.scriptType,
+                    StubScriptPath = s.stubScriptPath,
+                    RealScriptPath = s.realScriptPath,
+                    StubGuid = s.oldGuid,
+                    RealGuid = s.newGuid
+                })
+                .Where(s => s != null)
+                .ToList() ?? new List<ScriptGuidRemapping>();
+
+            report.FileDependencyUpdates = BuildDependencyDictionary(payload);
+
+            report.SummaryText = payload.summary ?? string.Empty;
+
+            return report;
+        }
+
+        private static Dictionary<FilePath, List<DependencyUpdate>> BuildDependencyDictionary(ReportJsonPayload payload)
+        {
+            var comparer = StringComparer.OrdinalIgnoreCase;
+            var result = new Dictionary<FilePath, List<DependencyUpdate>>(comparer);
+
+            void Merge(string path, IEnumerable<DependencyJson> deps)
+            {
+                if (string.IsNullOrEmpty(path))
+                    return;
+
+                if (!result.TryGetValue(path, out var list))
+                {
+                    list = new List<DependencyUpdate>();
+                    result[path] = list;
+                }
+
+                if (deps == null)
+                    return;
+
+                foreach (var dep in deps)
+                {
+                    if (dep == null)
+                        continue;
+
+                    list.Add(new DependencyUpdate
+                    {
+                        DependencyName = dep.dependencyName,
+                        DependencyPath = dep.dependencyPath,
+                        OldGuid = dep.oldGuid,
+                        NewGuid = dep.newGuid
+                    });
+                }
+            }
+
+            if (payload.fileDependencies != null)
+            {
+                foreach (var entry in payload.fileDependencies)
+                {
+                    Merge(entry?.filePath, entry?.dependencies);
+                }
+            }
+
+            if (payload.newFiles != null)
+            {
+                foreach (var newFile in payload.newFiles)
+                {
+                    Merge(newFile?.filePath, newFile?.dependencies);
+                }
+            }
+
+            foreach (var kvp in result.ToArray())
+            {
+                var ordered = kvp.Value
+                    .Where(d => d != null && (!string.IsNullOrEmpty(d.DependencyName) || !string.IsNullOrEmpty(d.DependencyPath)))
+                    .Distinct(new DependencyUpdateComparer())
+                    .OrderBy(d => d.DependencyName ?? string.Empty, comparer)
+                    .ToList();
+                result[kvp.Key] = ordered;
+            }
+
+            return result;
+        }
+
+        private class DependencyUpdateComparer : IEqualityComparer<DependencyUpdate>
+        {
+            public bool Equals(DependencyUpdate x, DependencyUpdate y)
+            {
+                if (ReferenceEquals(x, y))
+                    return true;
+                if (x is null || y is null)
+                    return false;
+
+                return string.Equals(x.DependencyName, y.DependencyName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(x.DependencyPath, y.DependencyPath, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(x.OldGuid, y.OldGuid, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(x.NewGuid, y.NewGuid, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public int GetHashCode(DependencyUpdate obj)
+            {
+                if (obj == null)
+                    return 0;
+
+                int hash = 17;
+                hash = hash * 23 + (obj.DependencyName?.ToLowerInvariant().GetHashCode() ?? 0);
+                hash = hash * 23 + (obj.DependencyPath?.ToLowerInvariant().GetHashCode() ?? 0);
+                hash = hash * 23 + (obj.OldGuid?.ToLowerInvariant().GetHashCode() ?? 0);
+                hash = hash * 23 + (obj.NewGuid?.ToLowerInvariant().GetHashCode() ?? 0);
+                return hash;
+            }
         }
 
         private void Populate()
@@ -266,7 +477,13 @@ namespace DivineDragon
                 newFiles = BuildNewFileJson(),
                 skippedFiles = (SkippedFiles ?? new List<FilePath>()).ToList(),
                 uuidMappings = BuildGuidMappingJson(),
-                scriptGuidRemappings = BuildScriptRemapJson()
+                scriptGuidRemappings = BuildScriptRemapJson(),
+                duplicateShaders = (DuplicateShaders ?? new List<FilePath>()).ToList(),
+                duplicateAssemblies = BuildDuplicateAssemblyJson(),
+                fileIdRemappings = BuildFileIdRemapJson(),
+                fileDependencies = BuildFileDependencyJson(),
+                summary = SummaryText,
+                operationsJson = Operations != null ? JsonUtility.ToJson(Operations) : null
             };
 
             return JsonUtility.ToJson(payload, true);
@@ -284,7 +501,7 @@ namespace DivineDragon
                 {
                     filePath = path,
                     dependencies = BuildDependencyJson(path),
-                    fileIdRemappings = null
+                    fileIdRemappings = BuildFileIdRemapJson(path)
                 })
                 .ToList();
         }
@@ -325,8 +542,82 @@ namespace DivineDragon
                     assetPath = mapping.AssetPath,
                     assetName = mapping.AssetName,
                     oldGuid = mapping.OldGuid,
-                    newGuid = mapping.NewGuid,
-                    fileIdRemappings = null
+                    newGuid = mapping.NewGuid
+                })
+                .ToList();
+        }
+
+        private List<FileIdRemapJson> BuildFileIdRemapJson()
+        {
+            if (FileIdRemappings == null || FileIdRemappings.Count == 0)
+            {
+                return new List<FileIdRemapJson>();
+            }
+
+            return FileIdRemappings
+                .Select(remap => new FileIdRemapJson
+                {
+                    fileGuid = remap.FileGuid,
+                    filePath = remap.FilePath,
+                    oldFileId = remap.OldFileId,
+                    newFileId = remap.NewFileId
+                })
+                .ToList();
+        }
+
+        private List<FileIdRemapJson> BuildFileIdRemapJson(FilePath assetPath)
+        {
+            if (FileIdRemappings == null || FileIdRemappings.Count == 0)
+            {
+                return new List<FileIdRemapJson>();
+            }
+
+            return FileIdRemappings
+                .Where(remap => string.Equals(remap.FilePath, assetPath, StringComparison.OrdinalIgnoreCase))
+                .Select(remap => new FileIdRemapJson
+                {
+                    fileGuid = remap.FileGuid,
+                    filePath = remap.FilePath,
+                    oldFileId = remap.OldFileId,
+                    newFileId = remap.NewFileId
+                })
+                .ToList();
+        }
+
+        private List<AssemblySkipInfoJson> BuildDuplicateAssemblyJson()
+        {
+            if (DuplicateAssemblies == null || DuplicateAssemblies.Count == 0)
+            {
+                return new List<AssemblySkipInfoJson>();
+            }
+
+            return DuplicateAssemblies
+                .Select(info => new AssemblySkipInfoJson
+                {
+                    assemblyName = info.AssemblyName,
+                    folderPath = info.FolderPath
+                })
+                .ToList();
+        }
+
+        private List<FileDependencyJson> BuildFileDependencyJson()
+        {
+            if (FileDependencyUpdates == null || FileDependencyUpdates.Count == 0)
+            {
+                return new List<FileDependencyJson>();
+            }
+
+            return FileDependencyUpdates
+                .Select(kvp => new FileDependencyJson
+                {
+                    filePath = kvp.Key,
+                    dependencies = kvp.Value?.Select(dep => new DependencyJson
+                    {
+                        dependencyName = dep.DependencyName,
+                        dependencyPath = dep.DependencyPath,
+                        oldGuid = dep.OldGuid,
+                        newGuid = dep.NewGuid
+                    }).ToList() ?? new List<DependencyJson>()
                 })
                 .ToList();
         }

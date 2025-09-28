@@ -12,7 +12,7 @@ using FilePath = System.String;
 using RelativePath = System.String;
 using DirectoryPath = System.String;
 using FileID = System.Int64;
-using FileIdRemapKey = System.ValueTuple<Guid, FileID, FileID>;
+using FileIdRemapKey = System.ValueTuple<string, long, long>;
 
 namespace DivineDragon
 {

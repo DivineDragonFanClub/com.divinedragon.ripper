@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -13,9 +15,57 @@ namespace DivineDragon
     {
         [SerializeField]
         private GuidSyncReport _report;
+        [SerializeField]
+        private string _reportPath;
+        [SerializeField]
+        private string _reportDirectory;
         private ScrollView _scrollView;
 
-        public static void ShowReport(GuidSyncReport report)
+        private const string ReportFileName = "GuidSyncReport.json";
+
+        [MenuItem("Divine Dragon/Dumper/Open GUID Sync Report...", priority = 2000)]
+        public static void OpenReportFromFile()
+        {
+            string initialDirectory = GetDefaultReportDirectory();
+            var path = EditorUtility.OpenFilePanel("Select GUID Sync Report", initialDirectory, "json");
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                var restored = GuidSyncReport.FromJson(json);
+                if (restored == null)
+                {
+                    Debug.LogWarning($"Selected file is not a valid GUID sync report: {path}");
+                    return;
+                }
+
+                var window = GetWindow<GuidSyncReportWindow>("GUID Sync Report");
+                window._report = restored;
+                window._reportPath = path;
+                window._reportDirectory = Path.GetDirectoryName(path);
+                window.minSize = new Vector2(600, 500);
+                window.Show();
+
+                if (window.rootVisualElement != null && window.rootVisualElement.childCount > 0)
+                {
+                    window.RefreshUI();
+                }
+                else
+                {
+                    window.CreateGUI();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to open GUID sync report: {ex.Message}");
+            }
+        }
+
+        public static void ShowReport(GuidSyncReport report, string exportDirectory = null)
         {
             if (report == null)
             {
@@ -24,12 +74,40 @@ namespace DivineDragon
 
             var window = GetWindow<GuidSyncReportWindow>("GUID Sync Report");
             window._report = report;
+            window._reportDirectory = exportDirectory;
+            window._reportPath = window.PersistReportToDisk(report);
             window.minSize = new Vector2(600, 500);
             window.Show();
 
             if (window.rootVisualElement != null && window.rootVisualElement.childCount > 0)
             {
                 window.RefreshUI();
+            }
+        }
+
+        private void OnEnable()
+        {
+            if (_report == null && !string.IsNullOrEmpty(_reportPath) && File.Exists(_reportPath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(_reportPath);
+                    var restored = GuidSyncReport.FromJson(json);
+                    if (restored != null)
+                    {
+                        _report = restored;
+                        _reportDirectory = Path.GetDirectoryName(_reportPath);
+                        _reportPath = PersistReportToDisk(_report);
+                        if (rootVisualElement != null && rootVisualElement.childCount > 0)
+                        {
+                            RefreshUI();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Failed to reload GUID sync report: {ex.Message}");
+                }
             }
         }
 
@@ -128,6 +206,114 @@ namespace DivineDragon
             buttonContainer2.Add(closeButton2);
 
             root.Add(buttonContainer2);
+        }
+
+        private string PersistReportToDisk(GuidSyncReport report)
+        {
+            if (report == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var directory = ResolveReportDirectory();
+                var fileName = DetermineReportFileName(directory);
+                var path = Path.Combine(directory, fileName);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(path, report.ToJson());
+                return path;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to persist GUID sync report: {ex.Message}");
+                return null;
+            }
+        }
+
+        private string ResolveReportPath()
+        {
+            var directory = ResolveReportDirectory();
+            var fileName = DetermineReportFileName(directory);
+            return Path.Combine(directory, fileName);
+        }
+
+        private string ResolveReportDirectory()
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(_reportDirectory) && Directory.Exists(_reportDirectory))
+                {
+                    return _reportDirectory;
+                }
+
+                var lastExport = DivineRipperWindow.GetLastExportPath();
+                if (!string.IsNullOrEmpty(lastExport) && Directory.Exists(lastExport))
+                {
+                return lastExport;
+            }
+
+                var projectRoot = Path.GetDirectoryName(Application.dataPath);
+                if (!string.IsNullOrEmpty(projectRoot))
+                {
+                    var exports = Path.Combine(projectRoot, "AssetRipperExports");
+                    if (!Directory.Exists(exports))
+                    {
+                        Directory.CreateDirectory(exports);
+                    }
+                    return exports;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to determine AssetRipperExports report directory: {ex.Message}");
+            }
+
+            var fallback = Path.Combine(Path.GetTempPath(), "GuidSyncReports");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
+
+        private static string DetermineReportFileName(string directory)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    var dirName = Path.GetFileName(Path.GetFullPath(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+                    if (!string.IsNullOrEmpty(dirName))
+                    {
+                        return $"GuidSyncReport_{dirName}.json";
+                    }
+                }
+            }
+            catch
+            {
+                // fall back to default name
+            }
+
+            return ReportFileName;
+        }
+
+        private static string GetDefaultReportDirectory()
+        {
+            var lastExport = DivineRipperWindow.GetLastExportPath();
+            if (!string.IsNullOrEmpty(lastExport) && Directory.Exists(lastExport))
+            {
+                return lastExport;
+            }
+
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            if (!string.IsNullOrEmpty(projectRoot))
+            {
+                var exports = Path.Combine(projectRoot, "AssetRipperExports");
+                if (Directory.Exists(exports))
+                {
+                    return exports;
+                }
+            }
+
+            return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         }
 
         private void PopulateReport()
@@ -925,25 +1111,18 @@ namespace DivineDragon
 
             var jsonButton = new Button(() =>
             {
-                string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
-                string defaultName = $"GuidSyncReport_{timestamp}.json";
-                string path = EditorUtility.SaveFilePanel(
-                    "Save GUID Sync Report",
-                    "",
-                    defaultName,
-                    "json"
-                );
-
-                if (!string.IsNullOrEmpty(path))
+                var path = _reportPath ?? ResolveReportPath();
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
                 {
-                    var json = _report.ToJson();
-                    System.IO.File.WriteAllText(path, json);
-                    Debug.Log($"Report saved to: {path}");
                     EditorUtility.RevealInFinder(path);
+                }
+                else
+                {
+                    Debug.LogWarning("No persisted GUID sync report found to reveal.");
                 }
             })
             {
-                text = "Export Report to JSON"
+                text = "Show JSON Report"
             };
             jsonButton.style.minWidth = 190;
             jsonButton.style.height = 26;
