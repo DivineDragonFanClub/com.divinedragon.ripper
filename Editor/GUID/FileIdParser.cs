@@ -69,7 +69,6 @@ namespace DivineDragon
             for (int i = 0; i < minCount; i++)
             {
                 mapping[sourceFileIds[i]] = destinationFileIds[i];
-                Debug.Log($"FileID mapping: {sourceFileIds[i]} -> {destinationFileIds[i]}");
             }
 
             if (sourceFileIds.Count != destinationFileIds.Count)

@@ -187,7 +187,6 @@ namespace DivineDragon
 
                 string content = File.ReadAllText(absolutePath);
                 bool modified = false;
-                var logged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 string newContent = GuidRegex.Replace(content, match =>
                 {
@@ -196,11 +195,6 @@ namespace DivineDragon
                         return match.Value;
 
                     modified = true;
-                    var logKey = $"{unityPath}|{oldGuid}";
-                    if (logged.Add(logKey))
-                    {
-                        Debug.Log($"Remapping GUID in {Path.GetFileName(absolutePath)}: {oldGuid} -> {remap.RealGuid}");
-                    }
                     return $"guid: {remap.RealGuid}";
                 });
 
