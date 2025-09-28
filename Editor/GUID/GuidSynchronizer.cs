@@ -12,6 +12,7 @@ using FilePath = System.String;
 using RelativePath = System.String;
 using DirectoryPath = System.String;
 using FileID = System.Int64;
+using FileIdRemapKey = System.ValueTuple<Guid, FileID, FileID>;
 
 namespace DivineDragon
 {
@@ -57,7 +58,7 @@ namespace DivineDragon
         private class UpdateResult
         {
             public Dictionary<FilePath, HashSet<Guid>> FileUpdates { get; } = new Dictionary<FilePath, HashSet<Guid>>();
-            public Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> FileIdUpdates { get; } = new Dictionary<FilePath, List<(Guid, FileID, FileID)>>();
+            public Dictionary<FilePath, HashSet<FileIdRemapKey>> FileIdUpdates { get; } = new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
         }
 
         public void Synchronize(SyncOperations operations, GuidSyncMode mode)
@@ -140,14 +141,11 @@ namespace DivineDragon
             {
                 var unityPath = ConvertToUnityPathForReport(kvp.Key);
 
-                var grouped = kvp.Value
-                    .GroupBy(r => (r.guid, r.oldFileId, r.newFileId))
-                    .Select(g => g.Key);
-
-                foreach (var remap in grouped)
+                foreach (var remap in kvp.Value)
                 {
+                    var (guid, oldFileId, newFileId) = remap;
                     var targetPath = unityPath;
-                    if (mappingBySubGuid.TryGetValue(remap.guid, out var guidMapping))
+                    if (mappingBySubGuid.TryGetValue(guid, out var guidMapping))
                     {
                         targetPath = ConvertRelativeAssetPath(guidMapping.RelativePath);
                     }
@@ -155,9 +153,9 @@ namespace DivineDragon
                     operations.FileIdRemaps.Add(new FileIdRemapOperation
                     {
                         AssetPath = targetPath,
-                        Guid = remap.guid,
-                        OldFileId = remap.oldFileId,
-                        NewFileId = remap.newFileId
+                        Guid = guid,
+                        OldFileId = oldFileId,
+                        NewFileId = newFileId
                     });
                 }
             }
@@ -269,7 +267,7 @@ namespace DivineDragon
                 return metaFiles;
             }
 
-            foreach (var filePath in Directory.GetFiles(assetsPath, "*.meta", SearchOption.AllDirectories))
+            foreach (var filePath in Directory.EnumerateFiles(assetsPath, "*.meta", SearchOption.AllDirectories))
             {
                 if (skipSharePrivate && IsSharePrivatePath(filePath, assetsPath))
                 {
@@ -422,9 +420,9 @@ namespace DivineDragon
 
             // Track which files had which GUIDs updated
             var fileUpdates = new Dictionary<FilePath, HashSet<Guid>>();
-            var fileIdUpdates = new Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>>();
+            var fileIdUpdates = new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
 
-            foreach (var filePath in Directory.GetFiles(_mainProjectPath, "*", SearchOption.AllDirectories))
+            foreach (var filePath in Directory.EnumerateFiles(_mainProjectPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath))
                     continue;
@@ -460,7 +458,7 @@ namespace DivineDragon
             FilePath filePath,
             Dictionary<Guid, Guid> guidMappings,
             Dictionary<Guid, Dictionary<FileID, FileID>> fileIdMappings,
-            Dictionary<FilePath, List<(Guid guid, FileID oldFileId, FileID newFileId)>> fileIdUpdates,
+            Dictionary<FilePath, HashSet<FileIdRemapKey>> fileIdUpdates,
             bool applyChanges)
         {
             var replacedGuids = new HashSet<Guid>();
@@ -495,17 +493,14 @@ namespace DivineDragon
                             // Build the replacement string with updated GUID and FileID
                             if (finalFileId != oldFileId)
                             {
-                                fileIdUpdates ??= new Dictionary<FilePath, List<(Guid, FileID, FileID)>>();
+                                fileIdUpdates ??= new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
                                 if (!fileIdUpdates.TryGetValue(filePath, out var updates))
                                 {
-                                    updates = new List<(Guid, FileID, FileID)>();
+                                    updates = new HashSet<FileIdRemapKey>();
                                     fileIdUpdates[filePath] = updates;
                                 }
 
-                                if (!updates.Exists(t => t.guid == oldGuid && t.oldFileId == oldFileId && t.newFileId == finalFileId))
-                                {
-                                    updates.Add((oldGuid, oldFileId, finalFileId));
-                                }
+                                updates.Add((oldGuid, oldFileId, finalFileId));
                             }
 
                             return $"{{fileID: {finalFileId}, guid: {newGuid}, type: {typeId}}}";

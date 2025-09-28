@@ -138,7 +138,7 @@ namespace DivineDragon
                 }
             }
 
-            var dependencyGraph = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var dependencyGraph = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var (filePath, unityPath) in assetFiles)
             {
@@ -170,16 +170,13 @@ namespace DivineDragon
                     if (string.Equals(dependencyUnityPath, unityPath, StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    if (!dependencyGraph.TryGetValue(unityPath, out var list))
+                    if (!dependencyGraph.TryGetValue(unityPath, out var set))
                     {
-                        list = new List<string>();
-                        dependencyGraph[unityPath] = list;
+                        set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        dependencyGraph[unityPath] = set;
                     }
 
-                    if (!list.Any(path => string.Equals(path, dependencyUnityPath, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        list.Add(dependencyUnityPath);
-                    }
+                    set.Add(dependencyUnityPath);
                 }
             }
 
