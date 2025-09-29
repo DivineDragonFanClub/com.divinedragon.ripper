@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 // Type aliases for clarity
 using Guid = System.String;
@@ -70,19 +71,30 @@ namespace DivineDragon
 
             try
             {
+                // Scan projects phase
+                var scanStopwatch = Stopwatch.StartNew();
                 ScanProjects();
+                scanStopwatch.Stop();
+                Debug.Log($"[GUID Sync]     ScanProjects ({mode}): {scanStopwatch.ElapsedMilliseconds}ms, found {_guidMappings.Count} mappings");
 
                 if (_guidMappings.Count == 0)
                 {
+                    Debug.Log($"[GUID Sync]     No GUID mappings found, skipping {mode} mode");
                     return;
                 }
 
-                // Do the actual work
+                // Update references phase
+                var updateStopwatch = Stopwatch.StartNew();
                 var updateResult = UpdateReferences(mode == GuidSyncMode.Apply);
+                updateStopwatch.Stop();
+                Debug.Log($"[GUID Sync]     UpdateReferences ({mode}): {updateStopwatch.ElapsedMilliseconds}ms, processed {updateResult.FileUpdates.Count} files");
 
                 if (mode == GuidSyncMode.Analyze && operations != null)
                 {
+                    var recordStopwatch = Stopwatch.StartNew();
                     RecordOperations(updateResult, operations);
+                    recordStopwatch.Stop();
+                    Debug.Log($"[GUID Sync]     RecordOperations: {recordStopwatch.ElapsedMilliseconds}ms");
                 }
             }
             catch (Exception ex)

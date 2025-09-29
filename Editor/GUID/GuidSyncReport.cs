@@ -69,6 +69,7 @@ namespace DivineDragon
         public Dictionary<FilePath, List<DependencyUpdate>> FileDependencyUpdates { get; private set; }
 
         public string SummaryText { get; private set; }
+        public SyncTiming Timing { get; private set; }
 
         private GuidSyncReport()
         {
@@ -87,6 +88,7 @@ namespace DivineDragon
             public List<FileDependencyJson> fileDependencies;
             public string summary;
             public string operationsJson;
+            public SyncTiming timing;
         }
 
         [Serializable]
@@ -155,6 +157,7 @@ namespace DivineDragon
             {
                 Operations = operations ?? new SyncOperations()
             };
+            report.Timing = report.Operations.Timing ?? new SyncTiming();
             report.Populate();
             return report;
         }
@@ -186,6 +189,7 @@ namespace DivineDragon
             {
                 Operations = new SyncOperations()
             };
+            report.Timing = report.Operations.Timing;
 
             report.NewFilesImported = payload.newFiles?
                 .Select(n => n?.filePath)
@@ -255,6 +259,11 @@ namespace DivineDragon
             report.FileDependencyUpdates = BuildDependencyDictionary(payload);
 
             report.SummaryText = payload.summary ?? string.Empty;
+
+            if (payload.timing != null)
+            {
+                CopyTiming(payload.timing, report.Timing);
+            }
 
             return report;
         }
@@ -467,7 +476,41 @@ namespace DivineDragon
                 $"FileID Remappings: {FileIdRemappings.Count}"
             };
 
+            if (Timing != null)
+            {
+                if (Timing.TotalMs > 0)
+                {
+                    lines.Add($"Total Sync Time: {Timing.TotalMs} ms");
+                }
+                if (Timing.AssetRipperMs > 0)
+                {
+                    lines.Add($"AssetRipper Duration: {Timing.AssetRipperMs} ms");
+                }
+            }
+
             SummaryText = string.Join("\n", lines);
+        }
+
+        private static void CopyTiming(SyncTiming source, SyncTiming destination)
+        {
+            if (source == null || destination == null)
+            {
+                return;
+            }
+
+            destination.AssetRipperMs = source.AssetRipperMs;
+            destination.PlanMs = source.PlanMs;
+            destination.ExecutionMs = source.ExecutionMs;
+            destination.ReportMs = source.ReportMs;
+            destination.TotalMs = source.TotalMs;
+
+            destination.DirectoryCreateMs = source.DirectoryCreateMs;
+            destination.CopyMs = source.CopyMs;
+            destination.ScriptRemapMs = source.ScriptRemapMs;
+            destination.GuidAnalyzeMs = source.GuidAnalyzeMs;
+            destination.GuidApplyMs = source.GuidApplyMs;
+            destination.GuidTotalMs = source.GuidTotalMs;
+            destination.CleanupMs = source.CleanupMs;
         }
 
         public string ToJson()
@@ -483,7 +526,8 @@ namespace DivineDragon
                 fileIdRemappings = BuildFileIdRemapJson(),
                 fileDependencies = BuildFileDependencyJson(),
                 summary = SummaryText,
-                operationsJson = Operations != null ? JsonUtility.ToJson(Operations) : null
+                operationsJson = Operations != null ? JsonUtility.ToJson(Operations) : null,
+                timing = Timing
             };
 
             return JsonUtility.ToJson(payload, true);

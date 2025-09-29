@@ -20,6 +20,24 @@ namespace DivineDragon
     }
 
     [Serializable]
+    public class SyncTiming
+    {
+        public long AssetRipperMs;
+        public long PlanMs;
+        public long ExecutionMs;
+        public long ReportMs;
+        public long TotalMs;
+
+        public long DirectoryCreateMs;
+        public long CopyMs;
+        public long ScriptRemapMs;
+        public long GuidAnalyzeMs;
+        public long GuidApplyMs;
+        public long GuidTotalMs;
+        public long CleanupMs;
+    }
+
+    [Serializable]
     public class CopyAssetOperation
     {
         public string SourcePath { get; set; }
@@ -90,6 +108,8 @@ namespace DivineDragon
         public List<FileIdRemapOperation> FileIdRemaps { get; } = new List<FileIdRemapOperation>();
         public List<DependencyOperation> Dependencies { get; } = new List<DependencyOperation>();
         public List<ScriptRemapOperation> ScriptRemaps { get; } = new List<ScriptRemapOperation>();
+
+        public SyncTiming Timing { get; } = new SyncTiming();
 
         public int NewFileCount => Copies
             .Where(c => c.IsNew && c.Kind == FileType.Asset)

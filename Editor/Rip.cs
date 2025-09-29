@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace DivineDragon
 {
@@ -14,6 +15,8 @@ namespace DivineDragon
 
     public class Rip
     {
+        private static long s_lastAssetRipperMs;
+
         public static bool RunAssetRipper(string assetRipperPath, string inputPath, string outputPath, InputMode mode)
         {
             using (AssetRipperRunner ripperRunner = new AssetRipperRunner(assetRipperPath))
@@ -36,8 +39,15 @@ namespace DivineDragon
                 }
                 if (!success) return false;
 
+                var exportStopwatch = Stopwatch.StartNew();
                 success = ripperRunner.ExportProject(outputPath);
+                exportStopwatch.Stop();
                 Debug.Log($"Export success: {success}");
+
+                if (success)
+                {
+                    s_lastAssetRipperMs = exportStopwatch.ElapsedMilliseconds;
+                }
 
                 return success;
             }
@@ -65,6 +75,8 @@ namespace DivineDragon
 
         internal static bool MergeExtractedAssets(string ripperOutputPath)
         {
+            var totalStopwatch = Stopwatch.StartNew();
+
             try
             {
                 string sourceAssetsPath = Path.Combine(ripperOutputPath, "ExportedProject", "Assets");
@@ -77,12 +89,30 @@ namespace DivineDragon
 
                 string projectAssetsPath = Application.dataPath;
 
+                // Plan phase
+                var planStopwatch = Stopwatch.StartNew();
                 var plan = SyncOperationPlanner.BuildPlan(sourceAssetsPath, projectAssetsPath);
                 var operations = plan.Operations;
+                planStopwatch.Stop();
+                Debug.Log($"[GUID Sync] Planning phase took: {planStopwatch.ElapsedMilliseconds}ms");
 
+                var timing = operations.Timing;
+                timing.AssetRipperMs = s_lastAssetRipperMs;
+                timing.PlanMs = planStopwatch.ElapsedMilliseconds;
+
+                // Execution phase
+                var runStopwatch = Stopwatch.StartNew();
                 SyncOperationRunner.Run(projectAssetsPath, sourceAssetsPath, operations, plan.DirectoriesToCreate, plan.StubScriptMappings);
+                runStopwatch.Stop();
+                Debug.Log($"[GUID Sync] Execution phase took: {runStopwatch.ElapsedMilliseconds}ms");
+                timing.ExecutionMs = runStopwatch.ElapsedMilliseconds;
 
+                // Report generation phase
+                var reportStopwatch = Stopwatch.StartNew();
                 var syncReport = GuidSyncReport.CreateFromOperations(operations);
+                reportStopwatch.Stop();
+                Debug.Log($"[GUID Sync] Report generation took: {reportStopwatch.ElapsedMilliseconds}ms");
+                timing.ReportMs = reportStopwatch.ElapsedMilliseconds;
 
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
@@ -93,12 +123,17 @@ namespace DivineDragon
                 var newFileCount = syncReport?.NewFilesImported.Count ?? 0;
                 var skippedCount = syncReport?.SkippedFiles.Count ?? 0;
 
+                totalStopwatch.Stop();
+                Debug.Log($"[GUID Sync] TOTAL sync time: {totalStopwatch.ElapsedMilliseconds}ms ({totalStopwatch.Elapsed.TotalSeconds:F2}s)");
+                timing.TotalMs = totalStopwatch.ElapsedMilliseconds;
                 Debug.Log($"Assets merged into project: {newFileCount} new files imported, {skippedCount} existing files skipped");
                 AssetDatabase.Refresh();
                 return true;
             }
             catch (System.Exception ex)
             {
+                totalStopwatch.Stop();
+                Debug.Log($"[GUID Sync] Failed after: {totalStopwatch.ElapsedMilliseconds}ms");
                 Debug.LogError($"Failed to copy extracted assets: {ex.Message}");
                 return false;
             }

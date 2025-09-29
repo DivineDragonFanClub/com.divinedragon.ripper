@@ -187,6 +187,12 @@ namespace DivineDragon
             var exportButtons = CreateExportButtons();
             root.Add(exportButtons);
 
+            var timingSection = CreateTimingSection();
+            if (timingSection != null)
+            {
+                root.Add(timingSection);
+            }
+
             _scrollView = new ScrollView();
             _scrollView.style.flexGrow = 1;
             root.Add(_scrollView);
@@ -1133,6 +1139,179 @@ namespace DivineDragon
             buttonContainer.Add(jsonButton);
 
             return buttonContainer;
+        }
+
+        private VisualElement CreateTimingSection()
+        {
+            var timing = _report?.Timing;
+            if (timing == null)
+            {
+                return null;
+            }
+
+            bool HasAnyValues(params long[] values) => values.Any(v => v > 0);
+
+            if (!HasAnyValues(
+                    timing.AssetRipperMs,
+                    timing.PlanMs,
+                    timing.ExecutionMs,
+                    timing.ReportMs,
+                    timing.TotalMs,
+                    timing.DirectoryCreateMs,
+                    timing.CopyMs,
+                    timing.ScriptRemapMs,
+                    timing.GuidAnalyzeMs,
+                    timing.GuidApplyMs,
+                    timing.GuidTotalMs,
+                    timing.CleanupMs))
+            {
+                return null;
+            }
+
+            Label CreateRow(string label, long value, bool emphasize = false, float indent = 0f)
+            {
+                bool isHeader = emphasize && value <= 0;
+                string text;
+                if (isHeader)
+                {
+                    text = label;
+                }
+                else
+                {
+                    text = value > 0
+                        ? $"• {label}: {FormatDuration(value)}"
+                        : $"• {label}";
+                }
+
+                var row = new Label(text);
+                row.style.fontSize = 12;
+                row.style.marginBottom = 4;
+                row.style.marginLeft = isHeader ? 0f : indent;
+                if (emphasize)
+                {
+                    row.style.unityFontStyleAndWeight = FontStyle.Bold;
+                }
+                return row;
+            }
+
+            var container = new VisualElement();
+            container.style.marginBottom = 20;
+
+            var title = new Label("Timing");
+            title.style.fontSize = 14;
+            title.style.unityFontStyleAndWeight = FontStyle.Bold;
+            title.style.marginBottom = 6;
+            container.Add(title);
+
+            VisualElement CreateColumn(IEnumerable<Label> rows)
+            {
+                var column = new VisualElement();
+                column.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f, 0.15f);
+                column.style.paddingTop = 10;
+                column.style.paddingBottom = 10;
+                column.style.paddingLeft = 12;
+                column.style.paddingRight = 12;
+                column.style.borderTopLeftRadius = 5;
+                column.style.borderTopRightRadius = 5;
+                column.style.borderBottomLeftRadius = 5;
+                column.style.borderBottomRightRadius = 5;
+                column.style.flexDirection = FlexDirection.Column;
+                column.style.marginRight = 10;
+                column.style.marginBottom = 10;
+
+                foreach (var row in rows)
+                {
+                    column.Add(row);
+                }
+
+                return column;
+            }
+
+            var columns = new VisualElement();
+            columns.style.flexDirection = FlexDirection.Row;
+            columns.style.flexWrap = Wrap.Wrap;
+            columns.style.maxWidth = 640;
+            columns.style.minHeight = 120;
+
+            var primaryRows = new List<Label>();
+            if (timing.AssetRipperMs > 0)
+                primaryRows.Add(CreateRow("AssetRipper", timing.AssetRipperMs, true));
+            if (timing.PlanMs > 0)
+                primaryRows.Add(CreateRow("Planning", timing.PlanMs, true));
+            if (timing.ExecutionMs > 0)
+                primaryRows.Add(CreateRow("Execution", timing.ExecutionMs, true));
+            if (timing.ReportMs > 0)
+                primaryRows.Add(CreateRow("Report", timing.ReportMs, true));
+            if (timing.TotalMs > 0)
+                primaryRows.Add(CreateRow("Total", timing.TotalMs, true));
+
+            if (primaryRows.Count > 0)
+            {
+                columns.Add(CreateColumn(primaryRows));
+            }
+
+            if (HasAnyValues(timing.DirectoryCreateMs, timing.CopyMs, timing.ScriptRemapMs))
+            {
+                var executionRows = new List<Label>
+                {
+                    CreateRow("Execution Breakdown", 0, true)
+                };
+
+                if (timing.DirectoryCreateMs > 0)
+                    executionRows.Add(CreateRow("Directory Creation", timing.DirectoryCreateMs));
+                if (timing.CopyMs > 0)
+                    executionRows.Add(CreateRow("File Copy", timing.CopyMs));
+                if (timing.ScriptRemapMs > 0)
+                    executionRows.Add(CreateRow("Script Remap", timing.ScriptRemapMs));
+
+                columns.Add(CreateColumn(executionRows));
+            }
+
+            if (HasAnyValues(timing.GuidAnalyzeMs, timing.GuidApplyMs, timing.GuidTotalMs))
+            {
+                var guidRows = new List<Label>
+                {
+                    CreateRow("GUID Sync", 0, true)
+                };
+
+                if (timing.GuidAnalyzeMs > 0)
+                    guidRows.Add(CreateRow("Analyze", timing.GuidAnalyzeMs));
+                if (timing.GuidApplyMs > 0)
+                    guidRows.Add(CreateRow("Apply", timing.GuidApplyMs));
+                if (timing.GuidTotalMs > 0)
+                    guidRows.Add(CreateRow("Total", timing.GuidTotalMs));
+
+                columns.Add(CreateColumn(guidRows));
+            }
+
+            if (timing.CleanupMs > 0)
+            {
+                columns.Add(CreateColumn(new[] { CreateRow("Cleanup", timing.CleanupMs, true) }));
+            }
+
+            container.Add(columns);
+            return container;
+        }
+
+        private static string FormatDuration(long milliseconds)
+        {
+            if (milliseconds <= 0)
+            {
+                return "0 ms";
+            }
+
+            var ts = TimeSpan.FromMilliseconds(milliseconds);
+            if (ts.TotalSeconds < 1)
+            {
+                return $"{milliseconds} ms";
+            }
+
+            if (ts.TotalMinutes < 1)
+            {
+                return $"{milliseconds} ms ({ts.TotalSeconds:F2}s)";
+            }
+
+            return $"{milliseconds} ms ({ts.TotalMinutes:F2}m)";
         }
 
 

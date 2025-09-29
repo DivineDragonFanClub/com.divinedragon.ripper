@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace DivineDragon
 {
@@ -22,21 +23,60 @@ namespace DivineDragon
             if (string.IsNullOrEmpty(targetDir)) throw new ArgumentException("Target directory is required", nameof(targetDir));
             if (string.IsNullOrEmpty(sourceDir)) throw new ArgumentException("Source directory is required", nameof(sourceDir));
 
-            var createdDirectories = EnsureDirectories(directoriesToCreate);
-            ExecuteCopies(operations.Copies);
+            var timing = operations.Timing;
 
+            // Directory creation
+            var dirStopwatch = Stopwatch.StartNew();
+            var createdDirectories = EnsureDirectories(directoriesToCreate);
+            dirStopwatch.Stop();
+            Debug.Log($"[GUID Sync] Directory creation took: {dirStopwatch.ElapsedMilliseconds}ms");
+            timing.DirectoryCreateMs = dirStopwatch.ElapsedMilliseconds;
+
+            // File copying
+            var copyStopwatch = Stopwatch.StartNew();
+            ExecuteCopies(operations.Copies);
+            copyStopwatch.Stop();
+            Debug.Log($"[GUID Sync] File copying took: {copyStopwatch.ElapsedMilliseconds}ms ({operations.Copies.Count} files)");
+            timing.CopyMs = copyStopwatch.ElapsedMilliseconds;
+
+            // Script remapping
+            var scriptStopwatch = Stopwatch.StartNew();
             var scriptRemaps = ComputeScriptRemapOperations(sourceDir, targetDir, operations.Copies, stubMappings);
             if (scriptRemaps.Count > 0)
             {
                 operations.ScriptRemaps.AddRange(scriptRemaps);
                 ApplyScriptRemappings(targetDir, scriptRemaps);
             }
+            scriptStopwatch.Stop();
+            Debug.Log($"[GUID Sync] Script remapping took: {scriptStopwatch.ElapsedMilliseconds}ms ({scriptRemaps.Count} remaps)");
+            timing.ScriptRemapMs = scriptStopwatch.ElapsedMilliseconds;
 
+            // GUID synchronization
+            var guidStopwatch = Stopwatch.StartNew();
             var synchronizer = new GuidSynchronizer(targetDir, sourceDir);
-            synchronizer.Synchronize(operations, GuidSyncMode.Analyze);
-            synchronizer.Synchronize(null, GuidSyncMode.Apply);
 
+            var analyzeStopwatch = Stopwatch.StartNew();
+            synchronizer.Synchronize(operations, GuidSyncMode.Analyze);
+            analyzeStopwatch.Stop();
+            Debug.Log($"[GUID Sync]   - Analyze mode: {analyzeStopwatch.ElapsedMilliseconds}ms");
+            timing.GuidAnalyzeMs = analyzeStopwatch.ElapsedMilliseconds;
+
+            var applyStopwatch = Stopwatch.StartNew();
+            synchronizer.Synchronize(null, GuidSyncMode.Apply);
+            applyStopwatch.Stop();
+            Debug.Log($"[GUID Sync]   - Apply mode: {applyStopwatch.ElapsedMilliseconds}ms");
+            timing.GuidApplyMs = applyStopwatch.ElapsedMilliseconds;
+
+            guidStopwatch.Stop();
+            Debug.Log($"[GUID Sync] Total GUID sync took: {guidStopwatch.ElapsedMilliseconds}ms");
+            timing.GuidTotalMs = guidStopwatch.ElapsedMilliseconds;
+
+            // Cleanup
+            var cleanupStopwatch = Stopwatch.StartNew();
             CleanupEmptyDirectories(createdDirectories);
+            cleanupStopwatch.Stop();
+            Debug.Log($"[GUID Sync] Directory cleanup took: {cleanupStopwatch.ElapsedMilliseconds}ms");
+            timing.CleanupMs = cleanupStopwatch.ElapsedMilliseconds;
         }
 
         private static HashSet<string> EnsureDirectories(IEnumerable<string> directories)
