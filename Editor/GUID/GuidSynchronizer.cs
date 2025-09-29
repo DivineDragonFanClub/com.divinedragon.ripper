@@ -169,12 +169,12 @@ namespace DivineDragon
             }
 
             var normalized = relativePath.Replace(Path.DirectorySeparatorChar, '/');
-            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            if (!normalized.StartsWith("Assets/"))
             {
                 normalized = "Assets/" + normalized.TrimStart('/');
             }
 
-            if (normalized.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+            if (normalized.EndsWith(".meta"))
             {
                 normalized = normalized.Substring(0, normalized.Length - ".meta".Length);
             }
@@ -189,7 +189,7 @@ namespace DivineDragon
                 return filePath;
             }
 
-            int assetsIndex = filePath.IndexOf("Assets", StringComparison.OrdinalIgnoreCase);
+            int assetsIndex = filePath.IndexOf("Assets");
             if (assetsIndex >= 0)
             {
                 string relativePath = filePath.Substring(assetsIndex);
@@ -241,7 +241,7 @@ namespace DivineDragon
             }
 
             var trimmed = projectPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (trimmed.EndsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            if (trimmed.EndsWith("Assets"))
             {
                 return trimmed;
             }
@@ -256,7 +256,7 @@ namespace DivineDragon
             // We only care about the Assets folder - that's where all the actual content that needs syncing lives
             // projectPath should already be pointing to the Assets folder, but guarding
             string assetsPath = projectPath;
-            if (!projectPath.EndsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            if (!projectPath.EndsWith("Assets"))
             {
                 assetsPath = Path.Combine(projectPath, "Assets");
             }
@@ -338,7 +338,7 @@ namespace DivineDragon
             }
 
             const string metaExtension = ".meta";
-            return relativePath.EndsWith(metaExtension, StringComparison.OrdinalIgnoreCase)
+            return relativePath.EndsWith(metaExtension)
                 ? relativePath.Substring(0, relativePath.Length - metaExtension.Length)
                 : relativePath;
         }
@@ -362,18 +362,18 @@ namespace DivineDragon
             }
 
             var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
-            if (!normalized.StartsWith("Assets/Share/", StringComparison.OrdinalIgnoreCase))
+            if (!normalized.StartsWith("Assets/Share/"))
             {
                 return false;
             }
 
             // Check for private folder segments or their meta files
-            if (normalized.IndexOf("/" + SyncOperationPlanner.PrivateFolderSuffix + "/", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (normalized.IndexOf("/" + SyncOperationPlanner.PrivateFolderSuffix + "/") >= 0)
             {
                 return true;
             }
 
-            if (normalized.EndsWith(SyncOperationPlanner.PrivateFolderSuffix + ".meta", StringComparison.OrdinalIgnoreCase))
+            if (normalized.EndsWith(SyncOperationPlanner.PrivateFolderSuffix + ".meta"))
             {
                 return true;
             }

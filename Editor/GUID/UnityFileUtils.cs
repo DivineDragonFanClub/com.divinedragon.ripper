@@ -37,12 +37,12 @@ namespace DivineDragon
             var normalizedPath = Path.GetFullPath(absolutePath).Replace('\\', '/');
             var normalizedRoot = Path.GetFullPath(assetsRoot).Replace('\\', '/');
 
-            if (!normalizedRoot.EndsWith("/", StringComparison.Ordinal))
+            if (!normalizedRoot.EndsWith("/"))
             {
                 normalizedRoot += "/";
             }
 
-            if (normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            if (normalizedPath.StartsWith(normalizedRoot))
             {
                 var relative = normalizedPath.Substring(normalizedRoot.Length);
                 return NormalizeAssetPath(relative);
@@ -61,7 +61,7 @@ namespace DivineDragon
 
             var normalizedRoot = Path.GetFullPath(assetsRoot);
             var normalizedUnity = NormalizeAssetPath(unityPath);
-            var relative = normalizedUnity.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)
+            var relative = normalizedUnity.StartsWith("Assets/")
                 ? normalizedUnity.Substring("Assets/".Length)
                 : normalizedUnity;
 
@@ -78,7 +78,7 @@ namespace DivineDragon
             if (normalized.Length == 0)
                 return "Assets";
 
-            if (normalized.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            if (normalized.StartsWith("Assets"))
             {
                 if (normalized.Length == 6)
                 {
@@ -105,7 +105,7 @@ namespace DivineDragon
             basePath = Path.GetFullPath(basePath);
             fullPath = Path.GetFullPath(fullPath);
 
-            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
             {
                 basePath += Path.DirectorySeparatorChar;
             }

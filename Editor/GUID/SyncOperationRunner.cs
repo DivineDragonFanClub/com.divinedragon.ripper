@@ -41,7 +41,7 @@ namespace DivineDragon
 
         private static HashSet<string> EnsureDirectories(IEnumerable<string> directories)
         {
-            var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var created = new HashSet<string>();
 
             if (directories == null)
             {
@@ -108,7 +108,7 @@ namespace DivineDragon
             if (mappingList.Count == 0)
                 return results;
 
-            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>(StringComparer.OrdinalIgnoreCase);
+            var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>();
             foreach (var mapping in mappingList)
             {
                 if (!string.IsNullOrEmpty(mapping.StubGuid))
@@ -132,7 +132,7 @@ namespace DivineDragon
                 if (string.IsNullOrEmpty(content))
                     continue;
 
-                var recordedForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var recordedForFile = new HashSet<string>();
 
                 foreach (Match match in GuidRegex.Matches(content))
                 {
@@ -176,7 +176,7 @@ namespace DivineDragon
                 if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
                     continue;
 
-                var replacements = new Dictionary<string, ScriptRemapOperation>(StringComparer.OrdinalIgnoreCase);
+                var replacements = new Dictionary<string, ScriptRemapOperation>();
                 foreach (var remap in group)
                 {
                     if (!replacements.ContainsKey(remap.StubGuid))

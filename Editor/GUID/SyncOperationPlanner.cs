@@ -10,7 +10,7 @@ namespace DivineDragon
     public class SyncPlan
     {
         public SyncOperations Operations { get; } = new SyncOperations();
-        public HashSet<string> DirectoriesToCreate { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> DirectoriesToCreate { get; } = new HashSet<string>();
         public List<ScriptUtils.ScriptMapping> StubScriptMappings { get; } = new List<ScriptUtils.ScriptMapping>();
     }
 
@@ -40,7 +40,7 @@ namespace DivineDragon
 
             var existingShaderNames = ShaderUtils.GetExistingShaderNames();
             var existingAssemblyNames = AssemblyUtils.GetExistingAssemblyNames();
-            var skipFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var skipFolders = new HashSet<string>();
             var skippedAssemblyInfo = new List<(string assemblyName, string folderPath, SkipReason reason)>();
 
             IdentifyAssemblyConflicts(plan, allFiles, existingAssemblyNames, skipFolders, skippedAssemblyInfo);
@@ -95,14 +95,14 @@ namespace DivineDragon
             IEnumerable<string> allFiles,
             HashSet<string> skipFolders)
         {
-            var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var overrides = new Dictionary<string, string>();
             if (allFiles == null)
                 return overrides;
 
-            var guidToUnityPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var unityToRelative = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var unityMetaToRelative = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var unityToAbsolute = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var guidToUnityPath = new Dictionary<string, string>();
+            var unityToRelative = new Dictionary<string, string>();
+            var unityMetaToRelative = new Dictionary<string, string>();
+            var unityToAbsolute = new Dictionary<string, string>();
             var assetFiles = new List<(string filePath, string unityPath)>();
 
             foreach (var file in allFiles)
@@ -138,7 +138,7 @@ namespace DivineDragon
                 }
             }
 
-            var dependencyGraph = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var dependencyGraph = new Dictionary<string, HashSet<string>>();
 
             foreach (var (filePath, unityPath) in assetFiles)
             {
@@ -167,12 +167,12 @@ namespace DivineDragon
                     if (!guidToUnityPath.TryGetValue(referencedGuid, out var dependencyUnityPath))
                         continue;
 
-                    if (string.Equals(dependencyUnityPath, unityPath, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(dependencyUnityPath, unityPath))
                         continue;
 
                     if (!dependencyGraph.TryGetValue(unityPath, out var set))
                     {
-                        set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        set = new HashSet<string>();
                         dependencyGraph[unityPath] = set;
                     }
 
@@ -180,8 +180,8 @@ namespace DivineDragon
                 }
             }
 
-            var visitedShare = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var queuedPrivate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var visitedShare = new HashSet<string>();
+            var queuedPrivate = new HashSet<string>();
             var queue = new Queue<(string assetUnity, string baseFolder)>();
 
             foreach (var assetUnity in unityToRelative.Keys)
@@ -225,7 +225,7 @@ namespace DivineDragon
 
                     var relocatedUnity = ComputeRelocatedUnityPath(baseFolder, dependencyUnity);
                     relocatedUnity = ApplySpecialRelocations(dependencyUnity, relocatedUnity);
-                    if (string.IsNullOrEmpty(relocatedUnity) || string.Equals(relocatedUnity, dependencyUnity, StringComparison.OrdinalIgnoreCase))
+                    if (string.IsNullOrEmpty(relocatedUnity) || string.Equals(relocatedUnity, dependencyUnity))
                         continue;
 
                     var relocatedRelative = UnityToRelativePath(relocatedUnity);
@@ -295,11 +295,11 @@ namespace DivineDragon
                 return dependencyUnityPath;
 
             var normalizedBase = UnityPathUtils.NormalizeAssetPath(baseFolderUnity);
-            if (!normalizedBase.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            if (!normalizedBase.StartsWith("Assets/"))
                 return dependencyUnityPath;
 
             var normalizedDependency = UnityPathUtils.NormalizeAssetPath(dependencyUnityPath);
-            if (!normalizedDependency.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) || normalizedDependency.Length <= 7)
+            if (!normalizedDependency.StartsWith("Assets/") || normalizedDependency.Length <= 7)
                 return dependencyUnityPath;
 
             var relativeToAssets = normalizedDependency.Substring(7);
@@ -333,12 +333,12 @@ namespace DivineDragon
                 return false;
             }
 
-            if (string.Equals(unityPath, SharedScriptsRoot, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(unityPath, SharedScriptsRoot))
             {
                 return true;
             }
 
-            if (unityPath.StartsWith(SharedScriptsRoot + "/", StringComparison.OrdinalIgnoreCase))
+            if (unityPath.StartsWith(SharedScriptsRoot + "/"))
             {
                 return true;
             }
@@ -352,7 +352,7 @@ namespace DivineDragon
                 return null;
 
             var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
-            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            if (!normalized.StartsWith("Assets/"))
                 return null;
 
             var lastSlash = normalized.LastIndexOf('/');
@@ -363,7 +363,7 @@ namespace DivineDragon
                 normalized = normalized.Substring(0, lastDot);
             }
 
-            if (!normalized.EndsWith(PrivateFolderSuffix, StringComparison.OrdinalIgnoreCase))
+            if (!normalized.EndsWith(PrivateFolderSuffix))
             {
                 normalized = string.Concat(normalized, PrivateFolderSuffix);
             }
@@ -373,7 +373,7 @@ namespace DivineDragon
 
         private static bool IsShareUnityPath(string unityPath)
         {
-            return !string.IsNullOrEmpty(unityPath) && unityPath.StartsWith("Assets/Share/", StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrEmpty(unityPath) && unityPath.StartsWith("Assets/Share/");
         }
 
         private static string UnityToRelativePath(string unityPath)
@@ -384,12 +384,12 @@ namespace DivineDragon
             }
 
             var normalized = UnityPathUtils.NormalizeAssetPath(unityPath);
-            if (string.Equals(normalized, "Assets", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(normalized, "Assets"))
             {
                 return string.Empty;
             }
 
-            if (normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) && normalized.Length > 7)
+            if (normalized.StartsWith("Assets/") && normalized.Length > 7)
             {
                 var trimmed = normalized.Substring(7);
                 return NormalizeRelativePath(trimmed);
@@ -411,7 +411,7 @@ namespace DivineDragon
 
         private static bool PathEquals(string left, string right)
         {
-            return string.Equals(NormalizeRelativePath(left), NormalizeRelativePath(right), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(NormalizeRelativePath(left), NormalizeRelativePath(right));
         }
 
         private static bool IsInSkippedFolder(string path, HashSet<string> skipFolders)

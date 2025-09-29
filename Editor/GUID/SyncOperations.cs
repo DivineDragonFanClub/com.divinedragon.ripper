@@ -94,7 +94,7 @@ namespace DivineDragon
         public int NewFileCount => Copies
             .Where(c => c.IsNew && c.Kind == FileType.Asset)
             .Select(c => c.UnityPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct()
             .Count();
 
         public int SkippedFileCount => Skips.Count(s => s.Reason == SkipReason.AlreadyExists || s.Reason == SkipReason.DuplicateShader);
