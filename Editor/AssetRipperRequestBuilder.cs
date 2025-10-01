@@ -47,7 +47,8 @@ namespace DivineDragon
                            EditorPrefs.GetString(GUI.Settings.DivineRipperSettingsProvider.AssetRipperPathKey, "")))
                 {
                     // TODO: We probably shouldn't have to call this ourselves as users. What if we forget?
-                    runner.SetDefaultUnityVersion();
+                    if (!runner.SetDefaultUnityVersion())
+                        Debug.LogError("Couldn't set default unity version.");
 
                     // TODO: Replace with grouping files in a temporary directory, LoadFolder then delete the temporary folder after extraction
                     foreach (string file in files)

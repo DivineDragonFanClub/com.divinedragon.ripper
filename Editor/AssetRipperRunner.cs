@@ -94,15 +94,18 @@ namespace DivineDragon
         
         public bool SetDefaultUnityVersion()
         {
-            var response = _apiClient.PostAsync(APIUrl + "/Settings/Update", new FormUrlEncodedContent(new Dictionary<string, string>
+            var form = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["DefaultVersion"] = Application.unityVersion,
-            })).Result;
+                { "DefaultVersion", Application.unityVersion },
+                { "LightmapTextureExportFormat", "Image" },
+            });
 
-            if (!response.IsSuccessStatusCode)
-                throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+            var result = _apiClient.PostAsync(APIUrl + "/Settings/Update", form).Result;
 
-            return response.IsSuccessStatusCode;
+            if (!result.IsSuccessStatusCode)
+                throw new AssetRipperApiException(result.StatusCode, result.ReasonPhrase);
+
+            return result.IsSuccessStatusCode;
         }
 
         public bool AddFile(string path)
@@ -120,7 +123,6 @@ namespace DivineDragon
         {
             var apiUrl = APIUrl;
             var response = _apiClient.PostAsync(apiUrl + "/LoadFolder", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
-            Debug.Log("LoadFolder result: " + response.Content.ReadAsStringAsync().Result);
 
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
