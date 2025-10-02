@@ -65,17 +65,29 @@ namespace DivineDragon
             }
         }
 
-        public static void ShowReport(GuidSyncReport report, string exportDirectory = null)
+        public static void HandleReport(GuidSyncReport report, string exportDirectory, bool shouldShow)
         {
             if (report == null)
             {
-                Debug.LogWarning("ShowReport called with null report");
+                Debug.LogWarning("HandleReport called with null report");
+                return;
             }
 
             var window = GetWindow<GuidSyncReportWindow>("GUID Sync Report");
             window._report = report;
             window._reportDirectory = exportDirectory;
             window._reportPath = window.PersistReportToDisk(report);
+
+            if (!shouldShow)
+            {
+                window.Close();
+                if (!string.IsNullOrEmpty(window._reportPath))
+                {
+                    Debug.Log($"GUID sync report saved to: {window._reportPath}");
+                }
+                return;
+            }
+
             window.minSize = new Vector2(600, 500);
             window.Show();
 
@@ -256,8 +268,8 @@ namespace DivineDragon
                 var lastExport = DivineRipperWindow.GetLastExportPath();
                 if (!string.IsNullOrEmpty(lastExport) && Directory.Exists(lastExport))
                 {
-                return lastExport;
-            }
+                    return lastExport;
+                }
 
                 var projectRoot = Path.GetDirectoryName(Application.dataPath);
                 if (!string.IsNullOrEmpty(projectRoot))
