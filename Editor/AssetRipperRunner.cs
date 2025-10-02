@@ -43,8 +43,9 @@ namespace DivineDragon
                     ProcessStartInfo ps = new ProcessStartInfo(executablePath)
                     {
                         UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        Arguments = "--launch-browser=false --port=6969"
+                        RedirectStandardOutput = false,
+                        Arguments = "--launch-browser=false --port=6969",
+                        CreateNoWindow = true
                     };
 
                     _assetRipperProcess = new Process();
