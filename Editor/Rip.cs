@@ -145,7 +145,7 @@ namespace DivineDragon
         internal static string CreatePersistentExportFolder(string suggestedName)
         {
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            string exportRoot = Path.Combine(projectRoot, "AssetRipperExports");
+            string exportRoot = Path.Combine(projectRoot, "AssetRipperExports").Replace("\\", "/");
             Directory.CreateDirectory(exportRoot);
 
             string safeName = string.IsNullOrEmpty(suggestedName)
@@ -158,7 +158,7 @@ namespace DivineDragon
             }
 
             string stampedFolder = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}";
-            string exportPath = Path.Combine(exportRoot, stampedFolder);
+            string exportPath = Path.Combine(exportRoot, stampedFolder).Replace("\\", "/");
             Directory.CreateDirectory(exportPath);
 
             return exportPath;
@@ -183,7 +183,8 @@ namespace DivineDragon
         /// <returns>Returns a randomized directory path to the user's temporary folder</returns>
         internal static string GenerateTemporaryDirectoryPath()
         {
-            return Path.GetTempPath() + Path.GetRandomFileName();
+            string path = Path.GetTempPath() + Path.GetRandomFileName();
+            return path.Replace("\\", "/");
         }
     }
 }
