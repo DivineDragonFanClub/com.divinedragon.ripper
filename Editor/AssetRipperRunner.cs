@@ -28,6 +28,12 @@ namespace DivineDragon
                 Debug.Log("AssetRipper is already running?");
                 return;
             }
+
+            if (string.IsNullOrEmpty(executablePath))
+            {
+                Debug.LogError("AssetRipper executablePath is null or empty");
+                return;
+            }
             
             // Start the process while the class instance is running
             _processThread = new Thread(() =>
@@ -86,34 +92,53 @@ namespace DivineDragon
             _apiClient = new HttpClient();
         }
         
-        public void SetDefaultUnityVersion()
+        public bool SetDefaultUnityVersion()
         {
-            var response = _apiClient.PostAsync(APIUrl + "/Settings/Update", new FormUrlEncodedContent(new Dictionary<string, string>
+            var form = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["DefaultVersion"] = Application.unityVersion,
-            })).Result;
-            
-            if (!response.IsSuccessStatusCode)
-                throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+                { "DefaultVersion", Application.unityVersion },
+                { "LightmapTextureExportFormat", "Image" },
+            });
+
+            var result = _apiClient.PostAsync(APIUrl + "/Settings/Update", form).Result;
+
+            if (!result.IsSuccessStatusCode)
+                throw new AssetRipperApiException(result.StatusCode, result.ReasonPhrase);
+
+            return result.IsSuccessStatusCode;
         }
 
-        public void AddFile(string path)
+        public bool AddFile(string path)
         {
             // TODO: Move to FormUrlEncodedContent
             var response = _apiClient.PostAsync(APIUrl + "/LoadFile", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
-            
+
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+
+            return response.IsSuccessStatusCode;
         }
 
-        public void ExportProject(string path)
+        public bool LoadFolder(string path)
+        {
+            var apiUrl = APIUrl;
+            var response = _apiClient.PostAsync(apiUrl + "/LoadFolder", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
+
+            if (!response.IsSuccessStatusCode)
+                throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
+
+            return response.IsSuccessStatusCode;
+        }
+
+        public bool ExportProject(string path)
         {
             // TODO: Move to FormUrlEncodedContent
             var response = _apiClient.PostAsync(APIUrl + "/Export/UnityProject", new StringContent($"path={path}", Encoding.ASCII, "application/x-www-form-urlencoded")).Result;
-            
+
             if (!response.IsSuccessStatusCode)
                 throw new AssetRipperApiException(response.StatusCode, response.ReasonPhrase);
-            
+
+            return response.IsSuccessStatusCode;
         }
         
         public void Dispose()
