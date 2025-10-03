@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -18,6 +21,9 @@ namespace DivineDragon
         private static Process _assetRipperProcess;
         private static HttpClient _apiClient;
         private static volatile bool _cancelRequested;
+
+        private const int MaxRetries = 10;
+        private const int RetryDelayMs = 100;
 
         public bool Running => _processThread is { IsAlive: true };
 
@@ -88,9 +94,41 @@ namespace DivineDragon
             
             // Wait 500ms to ensure the client had time to start and initialize. Jank but that's all we've got ATM.
             // TODO: Find a more reliable way
-            Thread.Sleep(500);
+            // Thread.Sleep(500);
             
             _apiClient = new HttpClient();
+            
+            bool apiReady = false;
+
+            for (int i = 0; i < MaxRetries; i++)
+            {
+                try
+                {
+                    var response = _apiClient.GetAsync("http://localhost:6969").Result;
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        apiReady = true;
+                        break;
+                    }
+                }
+                catch (Exception)
+                {
+                    Debug.Log($"Retry count {i}");
+                    
+                    // Ignore the exceptions
+                }
+
+                Thread.Sleep(RetryDelayMs);
+            }
+
+            if (!apiReady)
+            {
+                Debug.LogError("AssetRipper process did not respond in time.");
+                Dispose();
+                _assetRipperProcess = null;
+                _cancelRequested = false;
+            }
         }
         
         public bool SetDefaultUnityVersion()

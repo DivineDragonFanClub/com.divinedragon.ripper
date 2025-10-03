@@ -73,7 +73,7 @@ namespace DivineDragon
             }
             catch (AssetRipperApiException ex)
             {
-                Debug.LogError($"AssetRipperRunner ran into an exception: {ex.Message}");
+                Debug.LogError($"AssetRipperRunner ran into an API exception: {ex.Message}");
                 return false;
             }
             finally
