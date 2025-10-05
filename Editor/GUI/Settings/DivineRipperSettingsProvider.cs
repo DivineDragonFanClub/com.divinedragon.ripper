@@ -17,11 +17,11 @@ namespace DivineDragon.GUI.Settings
         public const string AssetRipperPathKey = "DivineRipper_AssetRipperPath"; // Should we turn this into a read-only Property for convenience?
 
         /// <summary>
-        /// Whether to show the GUID Sync Report Window after ripping
+        /// Whether sync developer tooling should be enabled
         /// </summary>
-        public const string ShowGuidSyncReportWindowKey = "DivineRipper_ShowGuidSyncReportWindow";
+        public const string SyncDevModeKey = "DivineRipper_SyncDevMode";
 
-        public static bool ShouldShowGuidSyncReportWindow => EditorPrefs.GetBool(ShowGuidSyncReportWindowKey, false);
+        public static bool IsSyncDevModeEnabled => EditorPrefs.GetBool(SyncDevModeKey, false);
         
         [SettingsProvider]
         public static SettingsProvider CreateDivineRipperSettingsProvider()
@@ -37,7 +37,7 @@ namespace DivineDragon.GUI.Settings
                     EditorGUILayout.BeginHorizontal();
                     
                     string assetRipperPath = EditorGUILayout.TextField("AssetRipper Path", EditorPrefs.GetString(AssetRipperPathKey, ""));
-                    bool showReportWindow = ShouldShowGuidSyncReportWindow;
+                    bool syncDevModeEnabled = IsSyncDevModeEnabled;
 
                     if (GUILayout.Button("Browse...", GUILayout.MaxWidth(80)))
                     {
@@ -51,12 +51,12 @@ namespace DivineDragon.GUI.Settings
 
                     EditorGUILayout.EndHorizontal();
 
-                    showReportWindow = EditorGUILayout.Toggle("Show Dev Report", showReportWindow);
+                    syncDevModeEnabled = EditorGUILayout.Toggle("Sync Dev Mode", syncDevModeEnabled);
 
                     if (EditorGUI.EndChangeCheck())
                     {
                         EditorPrefs.SetString(AssetRipperPathKey, assetRipperPath);
-                        EditorPrefs.SetBool(ShowGuidSyncReportWindowKey, showReportWindow);
+                        EditorPrefs.SetBool(SyncDevModeKey, syncDevModeEnabled);
                     }
                 },
             };

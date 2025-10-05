@@ -5,6 +5,7 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using DivineDragon.GUI.Settings;
 
 namespace DivineDragon
 {
@@ -23,7 +24,7 @@ namespace DivineDragon
 
         private const string ReportFileName = "GuidSyncReport.json";
 
-        [MenuItem("Divine Dragon/Dumper/Open GUID Sync Report...", priority = 2000)]
+        [MenuItem("Divine Dragon/Dumper/Open GUID Sync Report... (Dev Only)", priority = 2000)]
         public static void OpenReportFromFile()
         {
             string initialDirectory = GetDefaultReportDirectory();
@@ -65,7 +66,13 @@ namespace DivineDragon
             }
         }
 
-        public static void HandleReport(GuidSyncReport report, string exportDirectory, bool shouldShow)
+        [MenuItem("Divine Dragon/Dumper/Open GUID Sync Report... (Dev Only)", true)]
+        private static bool ValidateOpenReportFromFile()
+        {
+            return DivineRipperSettingsProvider.IsSyncDevModeEnabled;
+        }
+
+        public static void HandleReport(GuidSyncReport report, string exportDirectory, bool syncDevModeEnabled)
         {
             if (report == null)
             {
@@ -73,20 +80,15 @@ namespace DivineDragon
                 return;
             }
 
+            if (!syncDevModeEnabled)
+            {
+                return;
+            }
+
             var window = GetWindow<GuidSyncReportWindow>("GUID Sync Report");
             window._report = report;
             window._reportDirectory = exportDirectory;
             window._reportPath = window.PersistReportToDisk(report);
-
-            if (!shouldShow)
-            {
-                window.Close();
-                if (!string.IsNullOrEmpty(window._reportPath))
-                {
-                    Debug.Log($"GUID sync report saved to: {window._reportPath}");
-                }
-                return;
-            }
 
             window.minSize = new Vector2(600, 500);
             window.Show();
@@ -272,7 +274,7 @@ namespace DivineDragon
                 }
 
                 var projectRoot = Path.GetDirectoryName(Application.dataPath);
-                if (!string.IsNullOrEmpty(projectRoot))
+                if (!string.IsNullOrEmpty(projectRoot) && DivineRipperSettingsProvider.IsSyncDevModeEnabled)
                 {
                     var exports = Path.Combine(projectRoot, "AssetRipperExports");
                     if (!Directory.Exists(exports))
