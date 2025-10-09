@@ -58,19 +58,40 @@ namespace DivineDragon
         {
             // Leaving this here for now until the to-do is addressed
             string inputName = Path.GetFileNameWithoutExtension(inputPath);
-            string exportPath = CreatePersistentExportFolder(inputName);
-            
-            bool exportSucceeded = RunAssetRipper(EditorPrefs.GetString(GUI.Settings.DivineRipperSettingsProvider.AssetRipperPathKey, ""), inputPath, exportPath, mode);
-            
-            if (!exportSucceeded)
-            {
-                return false;
-            }
+            bool syncDevModeEnabled = GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled;
+            string exportPath;
 
-            RememberExportPath(exportPath);
+            if (syncDevModeEnabled)
+            {
+                exportPath = CreatePersistentExportFolder(inputName);
+            }
+            else
+            {
+                exportPath = GenerateTemporaryDirectoryPath();
+                Directory.CreateDirectory(exportPath);
+            }
             
-            bool mergeSucceeded = MergeExtractedAssets(exportPath);
-            return mergeSucceeded;
+            try
+            {
+                bool exportSucceeded = RunAssetRipper(EditorPrefs.GetString(GUI.Settings.DivineRipperSettingsProvider.AssetRipperPathKey, ""), inputPath, exportPath, mode);
+
+                if (!exportSucceeded)
+                {
+                    return false;
+                }
+
+                RememberExportPath(exportPath);
+
+                bool mergeSucceeded = MergeExtractedAssets(exportPath);
+                return mergeSucceeded;
+            }
+            finally
+            {
+                if (!syncDevModeEnabled && !string.IsNullOrEmpty(exportPath))
+                {
+                    Directory.Delete(exportPath, true);
+                }
+            }
         }
 
         internal static bool MergeExtractedAssets(string ripperOutputPath)
@@ -116,8 +137,8 @@ namespace DivineDragon
 
                 if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
                 {
-                    var shouldShow = GUI.Settings.DivineRipperSettingsProvider.ShouldShowGuidSyncReportWindow;
-                    EditorApplication.delayCall += () => GuidSyncReportWindow.HandleReport(syncReport, ripperOutputPath, shouldShow);
+                    var syncDevModeEnabled = GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled;
+                    EditorApplication.delayCall += () => GuidSyncReportWindow.HandleReport(syncReport, ripperOutputPath, syncDevModeEnabled);
                 }
 
                 var newFileCount = syncReport?.NewFilesImported.Count ?? 0;
@@ -166,6 +187,11 @@ namespace DivineDragon
         
         internal static void RememberExportPath(string exportPath)
         {
+            if (!GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled || string.IsNullOrEmpty(exportPath))
+            {
+                return;
+            }
+
             string lastPath = EditorPrefs.GetString(DivineRipperWindow.GetLastExportPath(), string.Empty);
             
             if (!string.IsNullOrEmpty(lastPath))

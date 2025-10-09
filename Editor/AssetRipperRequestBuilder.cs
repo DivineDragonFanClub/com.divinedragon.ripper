@@ -36,9 +36,21 @@ namespace DivineDragon
             Debug.Log($"Temp directory path: {tempDir}");
             Directory.CreateDirectory(tempDir);
 
+            bool syncDevModeEnabled = GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled;
+            string exportPath;
+
+            if (syncDevModeEnabled)
+            {
+                exportPath = Rip.CreatePersistentExportFolder(exportDirectory);
+            }
+            else
+            {
+                exportPath = Rip.GenerateTemporaryDirectoryPath();
+                Directory.CreateDirectory(exportPath);
+            }
+
             try
             {
-                string exportPath = Rip.CreatePersistentExportFolder(exportDirectory);
 
                 // TODO: Replace the EditorPrefs use with a proper setting system
                 // Look at BurstEditorOptions?
@@ -80,6 +92,11 @@ namespace DivineDragon
             {
                 // Make sure we delete the temporary directory no matter what when we're done
                 Directory.Delete(tempDir, true);
+
+                if (!syncDevModeEnabled && !string.IsNullOrEmpty(exportPath))
+                {
+                    Directory.Delete(exportPath, true);
+                }
             }
         }
     }
