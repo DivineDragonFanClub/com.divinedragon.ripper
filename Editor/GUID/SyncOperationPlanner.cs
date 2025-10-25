@@ -451,7 +451,7 @@ namespace DivineDragon
                 else if (existingAssemblyNames.Contains(assemblyName))
                 {
                     string assemblyFolder = AssemblyUtils.GetAssemblyFolder(filePath);
-                    var mappings = ScriptUtils.CreateStubToRealGuidMappings(assemblyFolder, assemblyName);
+                    var mappings = ScriptUtils.CreateStubToRealGuidMappings(assemblyFolder);
                     plan.StubScriptMappings.AddRange(mappings);
 
                     skipFolders.Add(assemblyFolder);
