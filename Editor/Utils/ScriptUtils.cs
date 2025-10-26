@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
-using UnityEditor.Compilation;
 using UnityEngine;
 
 // Type aliases for clarity
@@ -94,25 +93,6 @@ namespace DivineDragon
             return null;
         }
 
-        public static List<string> GetScriptsInAssembly(string assemblyName)
-        {
-            var scripts = new List<string>();
-
-            var assembly = CompilationPipeline.GetAssemblies()
-                .FirstOrDefault(a => a.name == assemblyName);
-
-            if (assembly == null)
-                return scripts;
-
-            // Get all source files in the assembly
-            if (assembly.sourceFiles != null)
-            {
-                scripts.AddRange(assembly.sourceFiles);
-            }
-
-            return scripts;
-        }
-
         public class ScriptMapping
         {
             public Guid StubGuid { get; set; }
@@ -122,11 +102,12 @@ namespace DivineDragon
             public FilePath RealPath { get; set; }
         }
 
-        public static List<ScriptMapping> CreateStubToRealGuidMappings(
-            string stubFolderPath,
-            string assemblyName)
+        public static List<ScriptMapping> CreateStubToRealGuidMappings(string stubFolderPath)
         {
             var mappings = new List<ScriptMapping>();
+
+            // Cache resolved types so we don't repeatedly walk assemblies
+            var resolvedTypeCache = new Dictionary<TypeName, Type>();
 
             // Get all stub scripts in the folder
             var stubScripts = Directory.GetFiles(stubFolderPath, "*.cs", SearchOption.AllDirectories)
@@ -136,20 +117,6 @@ namespace DivineDragon
             if (!stubScripts.Any())
                 return mappings;
 
-            // Get all real scripts in the assembly
-            var realScripts = GetScriptsInAssembly(assemblyName);
-
-            // Build type info for real scripts
-            var realTypeMap = new Dictionary<TypeName, FilePath>();
-            foreach (var realScript in realScripts)
-            {
-                var typeInfo = ExtractTypeInfo(realScript);
-                if (typeInfo != null)
-                {
-                    realTypeMap[typeInfo.FullName] = realScript;
-                }
-            }
-
             // Match stubs to real scripts
             foreach (var stubScript in stubScripts)
             {
@@ -157,27 +124,127 @@ namespace DivineDragon
                 if (stubType == null)
                     continue;
 
-                if (realTypeMap.TryGetValue(stubType.FullName, out var realScript))
-                {
-                    var stubGuid = GetGuidFromMetaFile(stubScript + ".meta");
-                    var realGuid = GetGuidFromMetaFile(realScript + ".meta");
+                var stubGuid = GetGuidFromMetaFile(stubScript + ".meta");
+                if (string.IsNullOrEmpty(stubGuid))
+                    continue;
 
-                    if (!string.IsNullOrEmpty(stubGuid) && !string.IsNullOrEmpty(realGuid))
+                if (TryGetRealScriptForType(stubType.FullName, resolvedTypeCache, out var resolvedGuid, out var resolvedAssetPath))
+                {
+                    mappings.Add(new ScriptMapping
                     {
-                        mappings.Add(new ScriptMapping
-                        {
-                            StubGuid = stubGuid,
-                            RealGuid = realGuid,
-                            TypeName = stubType.FullName,
-                            StubPath = stubScript,
-                            RealPath = realScript
-                        });
-                        Debug.Log($"Mapped stub {stubType.FullName} ({stubGuid}) to real script ({realGuid})");
-                    }
+                        StubGuid = stubGuid,
+                        RealGuid = resolvedGuid,
+                        TypeName = stubType.FullName,
+                        StubPath = stubScript,
+                        RealPath = NormalizeAbsolutePath(resolvedAssetPath)
+                    });
+                    Debug.Log($"Mapped stub {stubType.FullName} ({stubGuid}) to real script ({resolvedGuid}) via reflection lookup");
+                    continue;
                 }
+
+                Debug.LogWarning($"Failed to resolve real script for {stubType.FullName}; skipping GUID remap.");
             }
 
             return mappings;
+        }
+
+        private static bool TryGetRealScriptForType(
+            TypeName fullTypeName,
+            Dictionary<TypeName, Type> resolvedTypeCache,
+            out Guid realGuid,
+            out FilePath realAssetPath)
+        {
+            realGuid = null;
+            realAssetPath = null;
+
+            if (string.IsNullOrEmpty(fullTypeName))
+                return false;
+
+            if (!resolvedTypeCache.TryGetValue(fullTypeName, out var resolvedType) || resolvedType == null)
+            {
+                resolvedType = FindUnityObjectType(fullTypeName);
+                resolvedTypeCache[fullTypeName] = resolvedType;
+            }
+
+            if (resolvedType == null)
+                return false;
+
+            var potentialGuids = AssetDatabase.FindAssets($"t:MonoScript {resolvedType.Name}");
+            foreach (var guid in potentialGuids)
+            {
+                var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(assetPath))
+                    continue;
+
+                var monoScript = AssetDatabase.LoadAssetAtPath<MonoScript>(assetPath);
+                if (monoScript == null)
+                    continue;
+
+                var scriptClass = monoScript.GetClass();
+                if (scriptClass == null)
+                    continue;
+
+                if (scriptClass == resolvedType)
+                {
+                    realGuid = guid;
+                    realAssetPath = assetPath;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static Type FindUnityObjectType(TypeName fullTypeName)
+        {
+            if (string.IsNullOrEmpty(fullTypeName))
+                return null;
+
+            foreach (var type in TypeCache.GetTypesDerivedFrom<UnityEngine.Object>())
+            {
+                if (type != null && type.FullName == fullTypeName)
+                    return type;
+            }
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var candidate = assembly.GetType(fullTypeName);
+                    if (candidate != null && typeof(UnityEngine.Object).IsAssignableFrom(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                    // ignore assemblies we can't inspect
+                }
+            }
+
+            return null;
+        }
+
+        private static FilePath NormalizeAbsolutePath(FilePath path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return path;
+
+            if (Path.IsPathRooted(path))
+            {
+                return Path.GetFullPath(path).Replace('\\', '/');
+            }
+
+            try
+            {
+                var projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                var combined = Path.Combine(projectRoot, path);
+                return Path.GetFullPath(combined).Replace('\\', '/');
+            }
+            catch
+            {
+                return path.Replace('\\', '/');
+            }
         }
     }
 }
