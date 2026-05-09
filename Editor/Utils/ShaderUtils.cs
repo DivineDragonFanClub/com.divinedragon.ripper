@@ -15,6 +15,8 @@ namespace DivineDragon
         {
             var shaderNames = new HashSet<string>(StringComparer.Ordinal);
 
+            // Read shader names directly from disk instead of LoadAssetAtPath<Shader>, which
+            // force-compiles every shader in the project and dominates extraction time on URP/HDRP projects.
             var shaderGuids = AssetDatabase.FindAssets("t:Shader");
             foreach (var guid in shaderGuids)
             {
@@ -24,10 +26,15 @@ namespace DivineDragon
                     continue;
                 }
 
-                var shader = AssetDatabase.LoadAssetAtPath<Shader>(path);
-                if (shader != null && !string.IsNullOrEmpty(shader.name))
+                if (!path.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
                 {
-                    shaderNames.Add(shader.name);
+                    continue;
+                }
+
+                var shaderName = ExtractShaderName(path);
+                if (!string.IsNullOrEmpty(shaderName))
+                {
+                    shaderNames.Add(shaderName);
                 }
             }
 

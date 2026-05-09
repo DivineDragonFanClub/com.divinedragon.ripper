@@ -19,17 +19,31 @@ namespace DivineDragon
 {
     /// GUID "synchronization" that coordinates the remapping of GUIDs
     /// from subordinate project (imported assets) to main project (current Unity project)
-    public enum GuidSyncMode
-    {
-        Analyze,
-        Apply
-    }
-
     public class GuidSynchronizer
     {
         private readonly DirectoryPath _mainProjectPath;
         private readonly DirectoryPath _subordinateProjectPath;
         private readonly Dictionary<RelativePath, GuidMapping> _guidMappings;
+
+        private static readonly Dictionary<FilePath, MetaCacheEntry> _mainMetaCache
+            = new Dictionary<FilePath, MetaCacheEntry>(StringComparer.Ordinal);
+        private static readonly object _mainMetaCacheLock = new object();
+
+        private readonly struct MetaCacheEntry
+        {
+            public readonly DateTime LastWriteTimeUtc;
+            public readonly long Length;
+            public readonly Guid Guid;
+            public readonly FileID? MainFileId;
+
+            public MetaCacheEntry(DateTime lastWriteTimeUtc, long length, Guid guid, FileID? mainFileId)
+            {
+                LastWriteTimeUtc = lastWriteTimeUtc;
+                Length = length;
+                Guid = guid;
+                MainFileId = mainFileId;
+            }
+        }
 
         // Matches: guid: 0123456789abcdef0123456789abcdef
         // Captures the GUID (group 1)
@@ -62,40 +76,37 @@ namespace DivineDragon
             public Dictionary<FilePath, HashSet<FileIdRemapKey>> FileIdUpdates { get; } = new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
         }
 
-        public void Synchronize(SyncOperations operations, GuidSyncMode mode)
+        /// Single-pass scan + update + record. Previously this ran twice (Analyze then Apply),
+        /// re-doing the entire project walk both times.
+        public void Synchronize(SyncOperations operations)
         {
-            if (mode == GuidSyncMode.Analyze && operations == null)
+            if (operations == null)
             {
                 throw new ArgumentNullException(nameof(operations));
             }
 
             try
             {
-                // Scan projects phase
                 var scanStopwatch = Stopwatch.StartNew();
                 ScanProjects();
                 scanStopwatch.Stop();
-                Debug.Log($"[GUID Sync]     ScanProjects ({mode}): {scanStopwatch.ElapsedMilliseconds}ms, found {_guidMappings.Count} mappings");
+                Debug.Log($"[GUID Sync]     ScanProjects: {scanStopwatch.ElapsedMilliseconds}ms, found {_guidMappings.Count} mappings");
 
                 if (_guidMappings.Count == 0)
                 {
-                    Debug.Log($"[GUID Sync]     No GUID mappings found, skipping {mode} mode");
+                    Debug.Log($"[GUID Sync]     No GUID mappings found, skipping");
                     return;
                 }
 
-                // Update references phase
                 var updateStopwatch = Stopwatch.StartNew();
-                var updateResult = UpdateReferences(mode == GuidSyncMode.Apply);
+                var updateResult = UpdateReferences(applyChanges: true);
                 updateStopwatch.Stop();
-                Debug.Log($"[GUID Sync]     UpdateReferences ({mode}): {updateStopwatch.ElapsedMilliseconds}ms, processed {updateResult.FileUpdates.Count} files");
+                Debug.Log($"[GUID Sync]     UpdateReferences: {updateStopwatch.ElapsedMilliseconds}ms, processed {updateResult.FileUpdates.Count} files");
 
-                if (mode == GuidSyncMode.Analyze && operations != null)
-                {
-                    var recordStopwatch = Stopwatch.StartNew();
-                    RecordOperations(updateResult, operations);
-                    recordStopwatch.Stop();
-                    Debug.Log($"[GUID Sync]     RecordOperations: {recordStopwatch.ElapsedMilliseconds}ms");
-                }
+                var recordStopwatch = Stopwatch.StartNew();
+                RecordOperations(updateResult, operations);
+                recordStopwatch.Stop();
+                Debug.Log($"[GUID Sync]     RecordOperations: {recordStopwatch.ElapsedMilliseconds}ms");
             }
             catch (Exception ex)
             {
@@ -215,33 +226,43 @@ namespace DivineDragon
         {
             _guidMappings.Clear();
 
-            var mainMetaFiles = ScanMetaFiles(_mainProjectPath, skipSharePrivate: true);
-            var subordinateMetaFiles = ScanMetaFiles(_subordinateProjectPath);
+            var mainMetaFiles = ScanMetaFiles(_mainProjectPath, skipSharePrivate: true, useCache: true);
+            var subordinateMetaFiles = ScanMetaFiles(_subordinateProjectPath, useCache: false);
 
+            // Find the (relativePath -> mapping) pairs that actually need a FileID populate.
+            // Cheap scan first, then run the per-mapping file reads in parallel.
+            var pending = new List<GuidMapping>();
             foreach (var kvp in mainMetaFiles)
             {
                 var relativePath = kvp.Key;
                 var (mainGuid, mainMainFileId) = kvp.Value;
 
-                if (subordinateMetaFiles.TryGetValue(relativePath, out var subData))
+                if (!subordinateMetaFiles.TryGetValue(relativePath, out var subData))
+                    continue;
+
+                var (subGuid, subMainFileId) = subData;
+                if (mainGuid == subGuid)
+                    continue;
+
+                pending.Add(new GuidMapping
                 {
-                    var (subGuid, subMainFileId) = subData;
-                    if (mainGuid != subGuid)
-                    {
-                        var mapping = new GuidMapping
-                        {
-                            RelativePath = relativePath,
-                            MainGuid = mainGuid,
-                            SubordinateGuid = subGuid,
-                            MainMainObjectFileId = mainMainFileId,
-                            SubordinateMainObjectFileId = subMainFileId
-                        };
+                    RelativePath = relativePath,
+                    MainGuid = mainGuid,
+                    SubordinateGuid = subGuid,
+                    MainMainObjectFileId = mainMainFileId,
+                    SubordinateMainObjectFileId = subMainFileId
+                });
+            }
 
-                        PopulateFileIdMappings(mapping, _mainProjectPath, _subordinateProjectPath);
+            var parallelOptions = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+            System.Threading.Tasks.Parallel.ForEach(pending, parallelOptions, mapping =>
+            {
+                PopulateFileIdMappings(mapping, _mainProjectPath, _subordinateProjectPath);
+            });
 
-                        _guidMappings[relativePath] = mapping;
-                    }
-                }
+            foreach (var mapping in pending)
+            {
+                _guidMappings[mapping.RelativePath] = mapping;
             }
         }
 
@@ -261,7 +282,7 @@ namespace DivineDragon
             return Path.Combine(trimmed, "Assets");
         }
 
-        private Dictionary<RelativePath, (Guid guid, FileID? fileId)> ScanMetaFiles(DirectoryPath projectPath, bool skipSharePrivate = false)
+        private Dictionary<RelativePath, (Guid guid, FileID? fileId)> ScanMetaFiles(DirectoryPath projectPath, bool skipSharePrivate = false, bool useCache = false)
         {
             var metaFiles = new Dictionary<RelativePath, (Guid, FileID?)>();
 
@@ -279,6 +300,8 @@ namespace DivineDragon
                 return metaFiles;
             }
 
+            int cacheHits = 0, cacheMisses = 0;
+
             foreach (var filePath in Directory.EnumerateFiles(assetsPath, "*.meta", SearchOption.AllDirectories))
             {
                 if (skipSharePrivate && IsSharePrivatePath(filePath, assetsPath))
@@ -286,11 +309,60 @@ namespace DivineDragon
                     continue;
                 }
 
-                if (MetaFileParser.TryGetGuidAndMainFileId(filePath, out var guid, out var fileId))
+                Guid guid = null;
+                FileID? fileId = null;
+                bool resolved = false;
+
+                if (useCache)
+                {
+                    FileInfo info;
+                    try { info = new FileInfo(filePath); }
+                    catch { info = null; }
+
+                    if (info != null && info.Exists)
+                    {
+                        var mtime = info.LastWriteTimeUtc;
+                        var length = info.Length;
+
+                        lock (_mainMetaCacheLock)
+                        {
+                            if (_mainMetaCache.TryGetValue(filePath, out var cached) &&
+                                cached.LastWriteTimeUtc == mtime &&
+                                cached.Length == length)
+                            {
+                                guid = cached.Guid;
+                                fileId = cached.MainFileId;
+                                resolved = true;
+                                cacheHits++;
+                            }
+                        }
+
+                        if (!resolved && MetaFileParser.TryGetGuidAndMainFileId(filePath, out guid, out fileId))
+                        {
+                            lock (_mainMetaCacheLock)
+                            {
+                                _mainMetaCache[filePath] = new MetaCacheEntry(mtime, length, guid, fileId);
+                            }
+                            resolved = true;
+                            cacheMisses++;
+                        }
+                    }
+                }
+                else
+                {
+                    resolved = MetaFileParser.TryGetGuidAndMainFileId(filePath, out guid, out fileId);
+                }
+
+                if (resolved)
                 {
                     var relativePath = GetRelativePath(assetsPath, filePath);
                     metaFiles[relativePath] = (guid, fileId);
                 }
+            }
+
+            if (useCache)
+            {
+                Debug.Log($"[GUID Sync]     Meta-file cache: {cacheHits} hits, {cacheMisses} misses");
             }
 
             return metaFiles;
@@ -395,9 +467,13 @@ namespace DivineDragon
 
         private RelativePath GetRelativePath(DirectoryPath basePath, FilePath fullPath)
         {
-            var baseUri = new Uri(basePath.EndsWith(Path.DirectorySeparatorChar.ToString())
-                ? basePath
-                : basePath + Path.DirectorySeparatorChar);
+            var separator = basePath.EndsWith(Path.DirectorySeparatorChar.ToString()) ? basePath : basePath + Path.DirectorySeparatorChar;
+            if (fullPath.StartsWith(separator, StringComparison.OrdinalIgnoreCase))
+            {
+                return fullPath.Substring(separator.Length);
+            }
+
+            var baseUri = new Uri(separator);
             var fullUri = new Uri(fullPath);
             var relativeUri = baseUri.MakeRelativeUri(fullUri);
             return Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
@@ -430,24 +506,39 @@ namespace DivineDragon
                 }
             }
 
-            // Track which files had which GUIDs updated
-            var fileUpdates = new Dictionary<FilePath, HashSet<Guid>>();
-            var fileIdUpdates = new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
+            // Track which files had which GUIDs updated. Concurrent dictionaries because the
+            // main project YAML walk runs in parallel below.
+            var fileUpdates = new System.Collections.Concurrent.ConcurrentDictionary<FilePath, HashSet<Guid>>();
+            var fileIdUpdates = new System.Collections.Concurrent.ConcurrentDictionary<FilePath, HashSet<FileIdRemapKey>>();
 
+            // Materialize the filtered file list once so Parallel.ForEach can partition it.
+            var candidates = new List<FilePath>();
             foreach (var filePath in Directory.EnumerateFiles(_mainProjectPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath))
                     continue;
 
-                if (!UnityFileUtils.IsUnityYamlFile(filePath))
+                if (!UnityFileUtils.ShouldScanForReferences(filePath))
                     continue;
 
-                var replacedGuids = UpdateFileReferences(filePath, guidRemapping, fileIdMappings, fileIdUpdates, applyChanges);
+                candidates.Add(filePath);
+            }
+
+            // Each iteration is independent: read+regex+write a single file. Each call
+            // returns its own state which we merge into the concurrent dictionaries.
+            var parallelOptions = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+            System.Threading.Tasks.Parallel.ForEach(candidates, parallelOptions, filePath =>
+            {
+                var (replacedGuids, perFileIdRemaps) = UpdateFileReferences(filePath, guidRemapping, fileIdMappings, applyChanges);
                 if (replacedGuids.Count > 0)
                 {
                     fileUpdates[filePath] = replacedGuids;
                 }
-            }
+                if (perFileIdRemaps.Count > 0)
+                {
+                    fileIdUpdates[filePath] = perFileIdRemaps;
+                }
+            });
 
             var result = new UpdateResult();
             foreach (var kvp in fileUpdates)
@@ -464,20 +555,27 @@ namespace DivineDragon
         }
 
 
-        /// Updates GUID references in a single file
-        /// Returns the set of GUIDs that were replaced in the file
-        private static HashSet<Guid> UpdateFileReferences(
+        /// Updates GUID references in a single file. Returns both the set of replaced GUIDs
+        /// and any FileID remaps produced for this file. Returning state instead of mutating
+        /// a shared dictionary makes this safe to call in parallel.
+        private static (HashSet<Guid> replacedGuids, HashSet<FileIdRemapKey> fileIdRemaps) UpdateFileReferences(
             FilePath filePath,
             Dictionary<Guid, Guid> guidMappings,
             Dictionary<Guid, Dictionary<FileID, FileID>> fileIdMappings,
-            Dictionary<FilePath, HashSet<FileIdRemapKey>> fileIdUpdates,
             bool applyChanges)
         {
             var replacedGuids = new HashSet<Guid>();
+            var fileIdRemaps = new HashSet<FileIdRemapKey>();
 
             try
             {
                 string content = File.ReadAllText(filePath);
+
+                // Fast-reject: if the file has no `guid:` substring, neither regex can match.
+                if (content.IndexOf("guid:", StringComparison.Ordinal) < 0)
+                {
+                    return (replacedGuids, fileIdRemaps);
+                }
 
                 // For non-meta YAML assets, update compound fileID/guid references first so we operate on the original GUID values
                 if (!MetaFileParser.IsMetaFile(filePath))
@@ -492,7 +590,6 @@ namespace DivineDragon
                         {
                             replacedGuids.Add(oldGuid);
 
-                            // Check if we have a FileID mapping for this GUID
                             var finalFileId = oldFileId;
                             if (fileIdMappings != null && fileIdMappings.TryGetValue(oldGuid, out var fileIdMap))
                             {
@@ -502,17 +599,9 @@ namespace DivineDragon
                                 }
                             }
 
-                            // Build the replacement string with updated GUID and FileID
                             if (finalFileId != oldFileId)
                             {
-                                fileIdUpdates ??= new Dictionary<FilePath, HashSet<FileIdRemapKey>>();
-                                if (!fileIdUpdates.TryGetValue(filePath, out var updates))
-                                {
-                                    updates = new HashSet<FileIdRemapKey>();
-                                    fileIdUpdates[filePath] = updates;
-                                }
-
-                                updates.Add((oldGuid, oldFileId, finalFileId));
+                                fileIdRemaps.Add((oldGuid, oldFileId, finalFileId));
                             }
 
                             return $"{{fileID: {finalFileId}, guid: {newGuid}, type: {typeId}}}";
@@ -543,7 +632,7 @@ namespace DivineDragon
                 Debug.LogWarning($"Failed to update references in {filePath}: {ex.Message}");
             }
 
-            return replacedGuids;
+            return (replacedGuids, fileIdRemaps);
         }
 
     }

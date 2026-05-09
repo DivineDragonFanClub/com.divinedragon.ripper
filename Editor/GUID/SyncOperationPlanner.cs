@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace DivineDragon
@@ -48,6 +50,10 @@ namespace DivineDragon
             var relocationOverrides = BuildPrivateDependencyOverrides(sourceDir, allFiles, skipFolders);
             RegisterRelocatedDirectories(plan, relocationOverrides, targetDir);
 
+            var existingTargetFiles = Directory.Exists(targetDir)
+                ? new HashSet<string>(Directory.EnumerateFiles(targetDir, "*", SearchOption.AllDirectories), StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var filePath in allFiles)
             {
                 if (skipFolders.Any(skipFolder => AssemblyUtils.IsPathInFolder(filePath, skipFolder)))
@@ -77,11 +83,11 @@ namespace DivineDragon
 
                 if (isMetaFile)
                 {
-                    PlanMetaCopy(operations, filePath, targetFilePath, unityRelativeTarget);
+                    PlanMetaCopy(operations, filePath, targetFilePath, unityRelativeTarget, existingTargetFiles);
                 }
                 else
                 {
-                    PlanAssetCopy(operations, filePath, targetFilePath, unityRelativeTarget);
+                    PlanAssetCopy(operations, filePath, targetFilePath, unityRelativeTarget, existingTargetFiles);
                 }
             }
 
@@ -140,43 +146,67 @@ namespace DivineDragon
 
             var dependencyGraph = new Dictionary<string, HashSet<string>>();
 
-            foreach (var (filePath, unityPath) in assetFiles)
-            {
-                if (IsInSkippedFolder(filePath, skipFolders))
-                    continue;
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+            var partials = new ConcurrentBag<Dictionary<string, HashSet<string>>>();
 
-                if (!UnityFileUtils.IsUnityYamlFile(filePath))
-                    continue;
-
-                string content;
-                try
+            Parallel.ForEach(
+                assetFiles,
+                parallelOptions,
+                () => new Dictionary<string, HashSet<string>>(),
+                (tuple, _, local) =>
                 {
-                    content = File.ReadAllText(filePath);
-                }
-                catch
-                {
-                    continue;
-                }
+                    var (filePath, unityPath) = tuple;
+                    if (IsInSkippedFolder(filePath, skipFolders))
+                        return local;
 
-                foreach (Match match in GuidReferenceRegex.Matches(content))
-                {
-                    if (!match.Success || match.Groups.Count < 2)
-                        continue;
+                    if (!UnityFileUtils.IsUnityYamlFile(filePath))
+                        return local;
 
-                    var referencedGuid = match.Groups[1].Value;
-                    if (!guidToUnityPath.TryGetValue(referencedGuid, out var dependencyUnityPath))
-                        continue;
+                    string content;
+                    try { content = File.ReadAllText(filePath); }
+                    catch { return local; }
 
-                    if (string.Equals(dependencyUnityPath, unityPath))
-                        continue;
+                    if (string.IsNullOrEmpty(content))
+                        return local;
 
-                    if (!dependencyGraph.TryGetValue(unityPath, out var set))
+                    if (content.IndexOf("guid:", StringComparison.Ordinal) < 0)
+                        return local;
+
+                    foreach (Match match in GuidReferenceRegex.Matches(content))
                     {
-                        set = new HashSet<string>();
-                        dependencyGraph[unityPath] = set;
+                        if (!match.Success || match.Groups.Count < 2)
+                            continue;
+
+                        var referencedGuid = match.Groups[1].Value;
+                        if (!guidToUnityPath.TryGetValue(referencedGuid, out var dependencyUnityPath))
+                            continue;
+
+                        if (string.Equals(dependencyUnityPath, unityPath))
+                            continue;
+
+                        if (!local.TryGetValue(unityPath, out var set))
+                        {
+                            set = new HashSet<string>();
+                            local[unityPath] = set;
+                        }
+
+                        set.Add(dependencyUnityPath);
                     }
 
-                    set.Add(dependencyUnityPath);
+                    return local;
+                },
+                local => partials.Add(local));
+
+            foreach (var partial in partials)
+            {
+                foreach (var kvp in partial)
+                {
+                    if (!dependencyGraph.TryGetValue(kvp.Key, out var combined))
+                    {
+                        combined = new HashSet<string>();
+                        dependencyGraph[kvp.Key] = combined;
+                    }
+                    combined.UnionWith(kvp.Value);
                 }
             }
 
@@ -501,9 +531,10 @@ namespace DivineDragon
             SyncOperations operations,
             string sourcePath,
             string targetPath,
-            string unityPath)
+            string unityPath,
+            HashSet<string> existingTargetFiles)
         {
-            if (File.Exists(targetPath))
+            if (existingTargetFiles.Contains(targetPath))
             {
                 operations.Skips.Add(new SkipAssetOperation
                 {
@@ -527,9 +558,10 @@ namespace DivineDragon
             SyncOperations operations,
             string sourcePath,
             string targetPath,
-            string unityPath)
+            string unityPath,
+            HashSet<string> existingTargetFiles)
         {
-            if (File.Exists(targetPath))
+            if (existingTargetFiles.Contains(targetPath))
             {
                 return;
             }

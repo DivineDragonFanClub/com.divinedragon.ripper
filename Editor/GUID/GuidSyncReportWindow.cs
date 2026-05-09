@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -235,20 +236,35 @@ namespace DivineDragon
                 return null;
             }
 
+            string directory;
+            string fileName;
+            string path;
             try
             {
-                var directory = ResolveReportDirectory();
-                var fileName = DetermineReportFileName(directory);
-                var path = Path.Combine(directory, fileName);
+                directory = ResolveReportDirectory();
+                fileName = DetermineReportFileName(directory);
+                path = Path.Combine(directory, fileName);
                 Directory.CreateDirectory(directory);
-                File.WriteAllText(path, report.ToJson());
-                return path;
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"Failed to persist GUID sync report: {ex.Message}");
+                Debug.LogWarning($"Failed to prepare GUID sync report directory: {ex.Message}");
                 return null;
             }
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    File.WriteAllText(path, report.ToJson());
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Failed to persist GUID sync report: {ex.Message}");
+                }
+            });
+
+            return path;
         }
 
         private string ResolveReportPath()
@@ -409,7 +425,7 @@ namespace DivineDragon
                     itemContainer.style.alignItems = Align.Center;
                     itemContainer.style.marginLeft = 10;
 
-                    var bulletLabel = new Label("  • ");
+                    var bulletLabel = new Label("  - ");
                     itemContainer.Add(bulletLabel);
 
                     var parts = item.Split(new[] { match.Value }, System.StringSplitOptions.None);
@@ -435,7 +451,7 @@ namespace DivineDragon
                 }
                 else
                 {
-                    var itemLabel = new Label($"  • {item}");
+                    var itemLabel = new Label($"  - {item}");
                     itemLabel.style.marginLeft = 10;
                     section.Add(itemLabel);
                 }
@@ -575,7 +591,7 @@ namespace DivineDragon
                     headerRow.style.flexDirection = FlexDirection.Row;
                     headerRow.style.alignItems = Align.Center;
 
-                    var arrowLabel = new Label("→");
+                    var arrowLabel = new Label("->");
                     arrowLabel.style.fontSize = 10;
                     arrowLabel.style.color = new Color(0.7f, 0.7f, 0.9f);
                     arrowLabel.style.marginRight = 6;
@@ -656,7 +672,7 @@ namespace DivineDragon
                     oldGuidButton.style.fontSize = 9;
                     guidRow.Add(oldGuidButton);
 
-                    var guidArrow = new Label(" → ");
+                    var guidArrow = new Label(" -> ");
                     guidArrow.style.fontSize = 9;
                     guidArrow.style.marginLeft = 6;
                     guidArrow.style.marginRight = 6;
@@ -739,7 +755,7 @@ namespace DivineDragon
                 oldGuidButton.style.fontSize = 9;
                 guidRow.Add(oldGuidButton);
 
-                var arrowLabel = new Label(" → ");
+                var arrowLabel = new Label(" -> ");
                 arrowLabel.style.fontSize = 9;
                 arrowLabel.style.marginLeft = 6;
                 arrowLabel.style.marginRight = 6;
@@ -771,7 +787,7 @@ namespace DivineDragon
             oldIdButton.style.fontSize = 9;
             row.Add(oldIdButton);
 
-            var arrowLabel = new Label(" → ");
+            var arrowLabel = new Label(" -> ");
             arrowLabel.style.fontSize = 9;
             arrowLabel.style.marginLeft = 6;
             arrowLabel.style.marginRight = 6;
@@ -831,7 +847,7 @@ namespace DivineDragon
                     SelectAssetInProject(projectPath);
                 })
                 {
-                    text = $"• {projectPath}"
+                    text = $"- {projectPath}"
                 };
                 fileButton.style.fontSize = 12;
                 fileButton.style.marginLeft = 5;
@@ -880,7 +896,7 @@ namespace DivineDragon
                         depHeader.style.flexDirection = FlexDirection.Row;
                         depHeader.style.alignItems = Align.Center;
 
-                        var arrowLabel = new Label("→");
+                        var arrowLabel = new Label("->");
                         arrowLabel.style.fontSize = 10;
                         arrowLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
                         arrowLabel.style.marginRight = 5;
@@ -931,7 +947,7 @@ namespace DivineDragon
                         oldGuidButton.style.fontSize = 9;
                         guidRow.Add(oldGuidButton);
 
-                        var guidArrow = new Label(" → ");
+                        var guidArrow = new Label(" -> ");
                         guidArrow.style.fontSize = 9;
                         guidArrow.style.marginLeft = 4;
                         guidArrow.style.marginRight = 4;
@@ -1092,7 +1108,7 @@ namespace DivineDragon
                     SelectAssetInProject(file);
                 })
                 {
-                    text = $"• {file}"
+                    text = $"- {file}"
                 };
                 fileButton.style.fontSize = 12;
                 fileButton.style.marginLeft = 5;
@@ -1193,8 +1209,8 @@ namespace DivineDragon
                 else
                 {
                     text = value > 0
-                        ? $"• {label}: {FormatDuration(value)}"
-                        : $"• {label}";
+                        ? $"- {label}: {FormatDuration(value)}"
+                        : $"- {label}";
                 }
 
                 var row = new Label(text);
@@ -1373,6 +1389,9 @@ namespace DivineDragon
             return button;
         }
 
+        private static readonly Dictionary<string, string> _findAssetsByNameCache
+            = new Dictionary<string, string>(StringComparer.Ordinal);
+
         private string ConvertToUnityAssetPath(string filePath)
         {
             string assetsKeyword = "Assets" + System.IO.Path.DirectorySeparatorChar;
@@ -1385,13 +1404,16 @@ namespace DivineDragon
             }
 
             string fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-            string[] guids = AssetDatabase.FindAssets(fileName);
-            if (guids.Length > 0)
+
+            if (_findAssetsByNameCache.TryGetValue(fileName, out var cached))
             {
-                return AssetDatabase.GUIDToAssetPath(guids[0]);
+                return cached ?? filePath;
             }
 
-            return filePath;
+            string[] guids = AssetDatabase.FindAssets(fileName);
+            string resolved = guids.Length > 0 ? AssetDatabase.GUIDToAssetPath(guids[0]) : null;
+            _findAssetsByNameCache[fileName] = resolved;
+            return resolved ?? filePath;
         }
 
         private void SelectAssetInProject(string assetPath)

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using Dragonstone;
 using UnityEditor;
-using UnityEditor.Scripting;
 using UnityEngine;
 
 namespace DivineDragon
@@ -31,9 +30,8 @@ namespace DivineDragon
             {
                 Debug.LogError("Export directory path cannot be null or empty.");
             }
-            
+
             string tempDir = Rip.GenerateTemporaryDirectoryPath();
-            Debug.Log($"Temp directory path: {tempDir}");
             Directory.CreateDirectory(tempDir);
 
             bool syncDevModeEnabled = GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled;
@@ -53,28 +51,22 @@ namespace DivineDragon
             {
 
                 // TODO: Replace the EditorPrefs use with a proper setting system
-                // Look at BurstEditorOptions?
                 using (AssetRipperRunner runner =
                        new AssetRipperRunner(
                            EditorPrefs.GetString(GUI.Settings.DivineRipperSettingsProvider.AssetRipperPathKey, "")))
                 {
-                    // TODO: We probably shouldn't have to call this ourselves as users. What if we forget?
                     if (!runner.SetDefaultUnityVersion())
                         Debug.LogError("Couldn't set default unity version.");
 
-                    // TODO: Replace with grouping files in a temporary directory, LoadFolder then delete the temporary folder after extraction
                     foreach (string file in files)
                     {
                         var relativeFilePath = file.Replace(EngageAddressableSettings.GameBuildPath, null);
-                        Debug.Log(relativeFilePath);
                         var copyPath = tempDir + relativeFilePath;
-                        Debug.Log(copyPath);
                         Directory.CreateDirectory(Path.GetDirectoryName(copyPath));
                         File.Copy(file, copyPath);
                     }
 
                     runner.LoadFolder(tempDir);
-
                     runner.ExportProject(exportPath);
                 }
 
@@ -90,12 +82,13 @@ namespace DivineDragon
             }
             finally
             {
-                // Make sure we delete the temporary directory no matter what when we're done
-                Directory.Delete(tempDir, true);
+                try { Directory.Delete(tempDir, true); }
+                catch (Exception ex) { Debug.LogWarning($"Failed to clean up temp dir {tempDir}: {ex.Message}"); }
 
                 if (!syncDevModeEnabled && !string.IsNullOrEmpty(exportPath))
                 {
-                    Directory.Delete(exportPath, true);
+                    try { Directory.Delete(exportPath, true); }
+                    catch (Exception ex) { Debug.LogWarning($"Failed to clean up export dir {exportPath}: {ex.Message}"); }
                 }
             }
         }

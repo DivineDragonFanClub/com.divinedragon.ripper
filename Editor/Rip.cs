@@ -98,6 +98,8 @@ namespace DivineDragon
         {
             var totalStopwatch = Stopwatch.StartNew();
 
+            AssetDatabase.StartAssetEditing();
+
             try
             {
                 string sourceAssetsPath = Path.Combine(ripperOutputPath, "ExportedProject", "Assets");
@@ -158,8 +160,13 @@ namespace DivineDragon
                 Debug.LogError($"Failed to copy extracted assets: {ex.Message}");
                 return false;
             }
+            finally
+            {
+                // Pair with StartAssetEditing above; triggers the queued imports.
+                AssetDatabase.StopAssetEditing();
+            }
         }
-        
+
         // Do we actually need to persist? Especially in the directory?
         // Wouldn't it be better to generate a temporary directory and delete it when we're finished?
         // EDIT: Doge said it's for debugging purposes

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using UnityEngine;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
@@ -39,37 +41,25 @@ namespace DivineDragon
             Debug.Log($"[GUID Sync] File copying took: {copyStopwatch.ElapsedMilliseconds}ms ({operations.Copies.Count} files)");
             timing.CopyMs = copyStopwatch.ElapsedMilliseconds;
 
-            // Script remapping
             var scriptStopwatch = Stopwatch.StartNew();
-            var scriptRemaps = ComputeScriptRemapOperations(sourceDir, targetDir, operations.Copies, stubMappings);
+            var scriptRemaps = ApplyScriptRemapsInPlace(sourceDir, targetDir, operations.Copies, stubMappings);
             if (scriptRemaps.Count > 0)
             {
                 operations.ScriptRemaps.AddRange(scriptRemaps);
-                ApplyScriptRemappings(targetDir, scriptRemaps);
             }
             scriptStopwatch.Stop();
             Debug.Log($"[GUID Sync] Script remapping took: {scriptStopwatch.ElapsedMilliseconds}ms ({scriptRemaps.Count} remaps)");
             timing.ScriptRemapMs = scriptStopwatch.ElapsedMilliseconds;
 
-            // GUID synchronization
             var guidStopwatch = Stopwatch.StartNew();
             var synchronizer = new GuidSynchronizer(targetDir, sourceDir);
-
-            var analyzeStopwatch = Stopwatch.StartNew();
-            synchronizer.Synchronize(operations, GuidSyncMode.Analyze);
-            analyzeStopwatch.Stop();
-            Debug.Log($"[GUID Sync]   - Analyze mode: {analyzeStopwatch.ElapsedMilliseconds}ms");
-            timing.GuidAnalyzeMs = analyzeStopwatch.ElapsedMilliseconds;
-
-            var applyStopwatch = Stopwatch.StartNew();
-            synchronizer.Synchronize(null, GuidSyncMode.Apply);
-            applyStopwatch.Stop();
-            Debug.Log($"[GUID Sync]   - Apply mode: {applyStopwatch.ElapsedMilliseconds}ms");
-            timing.GuidApplyMs = applyStopwatch.ElapsedMilliseconds;
-
+            synchronizer.Synchronize(operations);
             guidStopwatch.Stop();
             Debug.Log($"[GUID Sync] Total GUID sync took: {guidStopwatch.ElapsedMilliseconds}ms");
             timing.GuidTotalMs = guidStopwatch.ElapsedMilliseconds;
+            // Legacy fields kept populated for the report window: total goes to Apply, Analyze is now a no-op.
+            timing.GuidAnalyzeMs = 0;
+            timing.GuidApplyMs = guidStopwatch.ElapsedMilliseconds;
 
             // Cleanup
             var cleanupStopwatch = Stopwatch.StartNew();
@@ -117,7 +107,18 @@ namespace DivineDragon
                 return;
             }
 
-            foreach (var copy in copies)
+            var copyList = copies as IList<CopyAssetOperation> ?? copies.ToList();
+            if (copyList.Count == 0)
+            {
+                return;
+            }
+
+            // File copies are independent (different paths, different bytes) so this is
+            // embarrassingly parallel. Capped at ProcessorCount to avoid trashing the disk.
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+            var failures = new ConcurrentQueue<(string source, string target, Exception ex)>();
+
+            Parallel.ForEach(copyList, parallelOptions, copy =>
             {
                 try
                 {
@@ -125,124 +126,92 @@ namespace DivineDragon
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"Failed to copy asset {copy.SourcePath} -> {copy.TargetPath}: {ex.Message}");
-                    throw;
+                    failures.Enqueue((copy.SourcePath, copy.TargetPath, ex));
                 }
+            });
+
+            if (!failures.IsEmpty)
+            {
+                foreach (var (source, target, ex) in failures)
+                {
+                    Debug.LogError($"Failed to copy asset {source} -> {target}: {ex.Message}");
+                }
+                throw failures.First().ex;
             }
         }
 
-        private static List<ScriptRemapOperation> ComputeScriptRemapOperations(
+        private static List<ScriptRemapOperation> ApplyScriptRemapsInPlace(
             string sourceDir,
             string targetDir,
             IEnumerable<CopyAssetOperation> copies,
             IEnumerable<ScriptUtils.ScriptMapping> stubMappings)
         {
             var results = new List<ScriptRemapOperation>();
-            if (copies == null)
-                return results;
-
-            if (stubMappings == null)
-                return results;
-
-            var mappingList = stubMappings.ToList();
-            if (mappingList.Count == 0)
+            if (copies == null || stubMappings == null)
                 return results;
 
             var guidMap = new Dictionary<string, ScriptUtils.ScriptMapping>();
-            foreach (var mapping in mappingList)
+            foreach (var mapping in stubMappings)
             {
                 if (!string.IsNullOrEmpty(mapping.StubGuid))
-                {
                     guidMap[mapping.StubGuid] = mapping;
-                }
             }
-
             if (guidMap.Count == 0)
                 return results;
 
-            foreach (var copy in copies)
+            var copyList = copies as IList<CopyAssetOperation> ?? copies.ToList();
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+            var perFileResults = new ConcurrentBag<ScriptRemapOperation>();
+
+            Parallel.ForEach(copyList, parallelOptions, copy =>
             {
-                if (copy.Kind == FileType.Meta)
-                    continue;
+                if (copy.Kind == FileType.Meta) return;
+                if (string.IsNullOrEmpty(copy.TargetPath) || !File.Exists(copy.TargetPath)) return;
 
-                if (string.IsNullOrEmpty(copy.TargetPath) || !File.Exists(copy.TargetPath))
-                    continue;
+                string content;
+                try { content = File.ReadAllText(copy.TargetPath); }
+                catch { return; }
 
-                var content = File.ReadAllText(copy.TargetPath);
-                if (string.IsNullOrEmpty(content))
-                    continue;
+                if (string.IsNullOrEmpty(content)) return;
+                // Fast-reject files that contain no GUID references at all (binary blobs, simple SOs, etc.)
+                if (content.IndexOf("guid:", StringComparison.Ordinal) < 0) return;
 
                 var recordedForFile = new HashSet<string>();
-
-                foreach (Match match in GuidRegex.Matches(content))
-                {
-                    string oldGuid = match.Groups[1].Value;
-                    if (!guidMap.TryGetValue(oldGuid, out var mapping))
-                        continue;
-
-                    var recordKey = $"{copy.UnityPath}|{mapping.StubGuid}|{mapping.RealGuid}";
-                    if (!recordedForFile.Add(recordKey))
-                        continue;
-
-                    var targetPath = copy.UnityPath;
-                    var realScriptPath = UnityPathUtils.FromAbsolute(mapping.RealPath, targetDir);
-                    var stubScriptPath = UnityPathUtils.FromAbsolute(mapping.StubPath, sourceDir);
-
-                    results.Add(new ScriptRemapOperation
-                    {
-                        TargetAssetPath = targetPath,
-                        ScriptType = mapping.TypeName,
-                        StubGuid = mapping.StubGuid,
-                        RealGuid = mapping.RealGuid,
-                        StubScriptPath = stubScriptPath,
-                        RealScriptPath = realScriptPath
-                    });
-                }
-            }
-
-            return results;
-        }
-
-        private static void ApplyScriptRemappings(string targetDir, IEnumerable<ScriptRemapOperation> remaps)
-        {
-            var remapList = remaps?.ToList();
-            if (remapList == null || remapList.Count == 0)
-                return;
-
-            foreach (var group in remapList.GroupBy(r => r.TargetAssetPath))
-            {
-                var unityPath = group.Key;
-                var absolutePath = UnityPathUtils.ToAbsolute(unityPath, targetDir);
-                if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
-                    continue;
-
-                var replacements = new Dictionary<string, ScriptRemapOperation>();
-                foreach (var remap in group)
-                {
-                    if (!replacements.ContainsKey(remap.StubGuid))
-                    {
-                        replacements[remap.StubGuid] = remap;
-                    }
-                }
-
-                string content = File.ReadAllText(absolutePath);
                 bool modified = false;
 
                 string newContent = GuidRegex.Replace(content, match =>
                 {
                     var oldGuid = match.Groups[1].Value;
-                    if (!replacements.TryGetValue(oldGuid, out var remap))
+                    if (!guidMap.TryGetValue(oldGuid, out var mapping))
                         return match.Value;
 
+                    var recordKey = $"{copy.UnityPath}|{mapping.StubGuid}|{mapping.RealGuid}";
+                    if (recordedForFile.Add(recordKey))
+                    {
+                        perFileResults.Add(new ScriptRemapOperation
+                        {
+                            TargetAssetPath = copy.UnityPath,
+                            ScriptType = mapping.TypeName,
+                            StubGuid = mapping.StubGuid,
+                            RealGuid = mapping.RealGuid,
+                            StubScriptPath = UnityPathUtils.FromAbsolute(mapping.StubPath, sourceDir),
+                            RealScriptPath = UnityPathUtils.FromAbsolute(mapping.RealPath, targetDir)
+                        });
+                    }
+
                     modified = true;
-                    return $"guid: {remap.RealGuid}";
+                    return $"guid: {mapping.RealGuid}";
                 });
 
                 if (modified)
                 {
-                    File.WriteAllText(absolutePath, newContent);
+                    try { File.WriteAllText(copy.TargetPath, newContent); }
+                    catch (Exception ex) { Debug.LogWarning($"Failed to rewrite script remaps in {copy.TargetPath}: {ex.Message}"); }
                 }
-            }
+            });
+
+            results.AddRange(perFileResults);
+            return results;
         }
 
         private static void CleanupEmptyDirectories(HashSet<string> createdDirectories)

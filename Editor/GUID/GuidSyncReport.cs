@@ -540,12 +540,33 @@ namespace DivineDragon
                 return new List<NewFileJson>();
             }
 
+            var remapsByFile = new Dictionary<FilePath, List<FileIdRemapJson>>(StringComparer.OrdinalIgnoreCase);
+            if (FileIdRemappings != null)
+            {
+                foreach (var remap in FileIdRemappings)
+                {
+                    if (string.IsNullOrEmpty(remap.FilePath)) continue;
+                    if (!remapsByFile.TryGetValue(remap.FilePath, out var list))
+                    {
+                        list = new List<FileIdRemapJson>();
+                        remapsByFile[remap.FilePath] = list;
+                    }
+                    list.Add(new FileIdRemapJson
+                    {
+                        fileGuid = remap.FileGuid,
+                        filePath = remap.FilePath,
+                        oldFileId = remap.OldFileId,
+                        newFileId = remap.NewFileId
+                    });
+                }
+            }
+
             return NewFilesImported
                 .Select(path => new NewFileJson
                 {
                     filePath = path,
                     dependencies = BuildDependencyJson(path),
-                    fileIdRemappings = BuildFileIdRemapJson(path)
+                    fileIdRemappings = remapsByFile.TryGetValue(path, out var rs) ? rs : new List<FileIdRemapJson>()
                 })
                 .ToList();
         }
@@ -609,24 +630,6 @@ namespace DivineDragon
                 .ToList();
         }
 
-        private List<FileIdRemapJson> BuildFileIdRemapJson(FilePath assetPath)
-        {
-            if (FileIdRemappings == null || FileIdRemappings.Count == 0)
-            {
-                return new List<FileIdRemapJson>();
-            }
-
-            return FileIdRemappings
-                .Where(remap => string.Equals(remap.FilePath, assetPath, StringComparison.OrdinalIgnoreCase))
-                .Select(remap => new FileIdRemapJson
-                {
-                    fileGuid = remap.FileGuid,
-                    filePath = remap.FilePath,
-                    oldFileId = remap.OldFileId,
-                    newFileId = remap.NewFileId
-                })
-                .ToList();
-        }
 
         private List<AssemblySkipInfoJson> BuildDuplicateAssemblyJson()
         {

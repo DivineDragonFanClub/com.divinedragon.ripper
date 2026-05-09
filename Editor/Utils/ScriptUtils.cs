@@ -40,11 +40,49 @@ namespace DivineDragon
             }
         }
 
+        private static readonly Dictionary<string, (DateTime mtime, long length, TypeInfo info)> _typeInfoCache
+            = new Dictionary<string, (DateTime, long, TypeInfo)>(StringComparer.Ordinal);
+        private static readonly object _typeInfoCacheLock = new object();
+
         public static TypeInfo ExtractTypeInfo(string scriptPath)
         {
             if (!File.Exists(scriptPath))
                 return null;
 
+            DateTime mtime;
+            long length;
+            try
+            {
+                var fi = new FileInfo(scriptPath);
+                mtime = fi.LastWriteTimeUtc;
+                length = fi.Length;
+            }
+            catch
+            {
+                return ReadTypeInfo(scriptPath);
+            }
+
+            lock (_typeInfoCacheLock)
+            {
+                if (_typeInfoCache.TryGetValue(scriptPath, out var cached) &&
+                    cached.mtime == mtime && cached.length == length)
+                {
+                    return cached.info;
+                }
+            }
+
+            var info = ReadTypeInfo(scriptPath);
+
+            lock (_typeInfoCacheLock)
+            {
+                _typeInfoCache[scriptPath] = (mtime, length, info);
+            }
+
+            return info;
+        }
+
+        private static TypeInfo ReadTypeInfo(string scriptPath)
+        {
             try
             {
                 string content = File.ReadAllText(scriptPath);

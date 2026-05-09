@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 // Type aliases for clarity
@@ -9,6 +10,31 @@ namespace DivineDragon
     /// Shared utility methods for working with Unity files
     public static class UnityFileUtils
     {
+        private static readonly HashSet<string> _yamlExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".prefab", ".unity", ".controller", ".overrideController", ".anim", ".mat",
+            ".physicMaterial", ".physicsMaterial2D", ".spriteatlas", ".spriteatlasv2",
+            ".preset", ".lighting", ".playable", ".signal", ".mixer", ".terrainlayer",
+            ".asmdef", ".guiskin", ".flare", ".fontsettings", ".brush", ".mask",
+            ".rendertexture", ".cubemap", ".giparams", ".lightmapparams",
+            ".shadervariants",
+        };
+
+        private static readonly HashSet<string> _ambiguousYamlExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".asset",
+        };
+
+        public static bool ShouldScanForReferences(FilePath filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return false;
+            var ext = Path.GetExtension(filePath);
+            if (string.IsNullOrEmpty(ext)) return false;
+            if (_yamlExtensions.Contains(ext)) return true;
+            if (_ambiguousYamlExtensions.Contains(ext)) return IsUnityYamlFile(filePath);
+            return false;
+        }
+
         /// Checks if a file is a Unity YAML file by examining its header
         public static bool IsUnityYamlFile(FilePath filePath)
         {
@@ -108,6 +134,11 @@ namespace DivineDragon
             if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
             {
                 basePath += Path.DirectorySeparatorChar;
+            }
+
+            if (fullPath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return fullPath.Substring(basePath.Length);
             }
 
             var baseUri = new Uri(basePath);
