@@ -92,21 +92,28 @@ namespace DivineDragon
                 scanStopwatch.Stop();
                 Debug.Log($"[GUID Sync]     ScanProjects: {scanStopwatch.ElapsedMilliseconds}ms, found {_guidMappings.Count} mappings");
 
-                if (_guidMappings.Count == 0)
+                if (_guidMappings.Count > 0)
                 {
-                    Debug.Log($"[GUID Sync]     No GUID mappings found, skipping");
-                    return;
+                    var updateStopwatch = Stopwatch.StartNew();
+                    var updateResult = UpdateReferences(applyChanges: true);
+                    updateStopwatch.Stop();
+                    Debug.Log($"[GUID Sync]     UpdateReferences: {updateStopwatch.ElapsedMilliseconds}ms, processed {updateResult.FileUpdates.Count} files");
+
+                    var recordStopwatch = Stopwatch.StartNew();
+                    RecordOperations(updateResult, operations);
+                    recordStopwatch.Stop();
+                    Debug.Log($"[GUID Sync]     RecordOperations: {recordStopwatch.ElapsedMilliseconds}ms");
+                }
+                else
+                {
+                    Debug.Log($"[GUID Sync]     No GUID mappings found, skipping path-based remap");
                 }
 
-                var updateStopwatch = Stopwatch.StartNew();
-                var updateResult = UpdateReferences(applyChanges: true);
-                updateStopwatch.Stop();
-                Debug.Log($"[GUID Sync]     UpdateReferences: {updateStopwatch.ElapsedMilliseconds}ms, processed {updateResult.FileUpdates.Count} files");
-
-                var recordStopwatch = Stopwatch.StartNew();
-                RecordOperations(updateResult, operations);
-                recordStopwatch.Stop();
-                Debug.Log($"[GUID Sync]     RecordOperations: {recordStopwatch.ElapsedMilliseconds}ms");
+                // Orphan-reference scan runs regardless of mapping count — these are dead refs
+                // whose GUIDs don't exist as meta files in either project, so the normal
+                // path-matched remap path can never see them. Cheap because it shares the same
+                // YAML-file shortlist UpdateReferences uses and skips files with no `guid:` text.
+                OrphanReferenceScanner.ScanAndRecord(_mainProjectPath, _subordinateProjectPath, operations);
             }
             catch (Exception ex)
             {

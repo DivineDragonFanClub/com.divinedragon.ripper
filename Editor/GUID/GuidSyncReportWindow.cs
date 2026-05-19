@@ -400,6 +400,12 @@ namespace DivineDragon
                 var duplicateAssembliesSection = CreateDuplicateAssembliesSection();
                 _scrollView.Add(duplicateAssembliesSection);
             }
+
+            if (_report.OrphanReferences != null && _report.OrphanReferences.Count > 0)
+            {
+                var orphanSection = CreateOrphanReferencesSection();
+                _scrollView.Add(orphanSection);
+            }
         }
 
         private VisualElement CreateSection(string title, List<string> items)
@@ -1075,6 +1081,226 @@ namespace DivineDragon
 
             section.Add(fileListContainer);
             return section;
+        }
+
+        private VisualElement CreateOrphanReferencesSection()
+        {
+            // Red-tinted to signal these are project-data errors (the sync didn't fix them and
+            // can't, without user input). One row per (referencing asset, dead GUID); rows with a
+            // filename-proximity suggestion get an "Apply" button that rewrites the file in place.
+            var section = new VisualElement();
+            section.style.marginBottom = 20;
+            section.style.marginTop = 10;
+
+            int autoFixed = _report.OrphanReferences.Count(o => o.WasAutoFixed);
+            int needsAttention = _report.OrphanReferences.Count - autoFixed;
+            var titleLabel = new Label($"Orphan References ({_report.OrphanReferences.Count} — {autoFixed} auto-fixed, {needsAttention} need attention)");
+            titleLabel.style.fontSize = 14;
+            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            titleLabel.style.marginBottom = 4;
+            titleLabel.style.color = needsAttention > 0
+                ? new Color(1f, 0.55f, 0.55f)
+                : new Color(0.6f, 1f, 0.6f);
+            section.Add(titleLabel);
+
+            var helpLabel = new Label(
+                "GUIDs referenced by main-project YAML that resolve to no asset in either project. " +
+                "Typical cause: a previous dump imported a font/material whose internal references " +
+                "point to an atlas GUID that no longer exists. Entries marked ✓ were rewritten in place " +
+                "using the filename-proximity guess; rows with no suggestion need a manual fix.");
+            helpLabel.style.fontSize = 11;
+            helpLabel.style.color = new Color(0.85f, 0.85f, 0.85f);
+            helpLabel.style.marginBottom = 8;
+            helpLabel.style.whiteSpace = WhiteSpace.Normal;
+            section.Add(helpLabel);
+
+            var listContainer = new ScrollView(ScrollViewMode.Vertical);
+            listContainer.style.maxHeight = 320;
+            listContainer.style.backgroundColor = new Color(0.35f, 0.18f, 0.18f, 0.18f);
+            listContainer.style.paddingTop = 8;
+            listContainer.style.paddingBottom = 8;
+            listContainer.style.paddingLeft = 10;
+            listContainer.style.paddingRight = 10;
+            listContainer.style.borderTopLeftRadius = 5;
+            listContainer.style.borderTopRightRadius = 5;
+            listContainer.style.borderBottomLeftRadius = 5;
+            listContainer.style.borderBottomRightRadius = 5;
+
+            foreach (var orphan in _report.OrphanReferences)
+            {
+                listContainer.Add(BuildOrphanRow(orphan));
+            }
+
+            section.Add(listContainer);
+            return section;
+        }
+
+        private VisualElement BuildOrphanRow(OrphanReference orphan)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Column;
+            row.style.marginBottom = 8;
+            row.style.paddingTop = 4;
+            row.style.paddingBottom = 4;
+            row.style.paddingLeft = 6;
+            row.style.paddingRight = 6;
+            row.style.backgroundColor = new Color(0, 0, 0, 0.15f);
+            row.style.borderTopLeftRadius = 3;
+            row.style.borderTopRightRadius = 3;
+            row.style.borderBottomLeftRadius = 3;
+            row.style.borderBottomRightRadius = 3;
+
+            // First line: referencing asset (clickable, jumps to it in the Project view). Prefix
+            // with a ✓ for auto-fixed rows so the eye can pick them out instantly when scrolling.
+            string buttonPrefix = orphan.WasAutoFixed ? "✓ " : string.Empty;
+            var assetButton = new Button(() => SelectAssetInProject(orphan.AssetPath))
+            {
+                text = $"{buttonPrefix}{orphan.AssetPath}:{orphan.LineNumber}" + (orphan.Occurrences > 1 ? $"  ×{orphan.Occurrences}" : "")
+            };
+            assetButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+            assetButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            assetButton.style.color = orphan.WasAutoFixed
+                ? new Color(0.6f, 1f, 0.6f)
+                : new Color(1f, 0.8f, 0.8f);
+            assetButton.style.backgroundColor = Color.clear;
+            assetButton.style.borderLeftWidth = 0;
+            assetButton.style.borderRightWidth = 0;
+            assetButton.style.borderTopWidth = 0;
+            assetButton.style.borderBottomWidth = 0;
+            assetButton.style.paddingLeft = 0;
+            row.Add(assetButton);
+
+            // Second line: the orphan GUID itself, optionally annotated with what it was rewritten to.
+            string orphanText = orphan.WasAutoFixed
+                ? $"Rewrote {orphan.Occurrences} reference(s): {orphan.OrphanGuid} → {orphan.SuggestedGuid}"
+                : $"Dead reference → guid: {orphan.OrphanGuid}";
+            var orphanLine = new Label(orphanText);
+            orphanLine.style.fontSize = 11;
+            orphanLine.style.marginLeft = 12;
+            orphanLine.style.color = orphan.WasAutoFixed
+                ? new Color(0.7f, 0.95f, 0.7f)
+                : new Color(0.95f, 0.7f, 0.7f);
+            row.Add(orphanLine);
+
+            // Third line: target of the (auto-applied or proposed) fix.
+            if (orphan.WasAutoFixed)
+            {
+                var targetLabel = new Label($"→ {orphan.SuggestedAssetPath} ({orphan.SuggestionReason})");
+                targetLabel.style.fontSize = 11;
+                targetLabel.style.marginLeft = 12;
+                targetLabel.style.color = new Color(0.7f, 0.95f, 0.7f);
+                targetLabel.style.whiteSpace = WhiteSpace.Normal;
+                row.Add(targetLabel);
+            }
+            else if (!string.IsNullOrEmpty(orphan.SuggestedGuid))
+            {
+                // The scanner wanted to fix this but couldn't (file likely read-only / locked).
+                // Keep the Apply button as a manual fallback.
+                var suggestionContainer = new VisualElement();
+                suggestionContainer.style.flexDirection = FlexDirection.Row;
+                suggestionContainer.style.alignItems = Align.Center;
+                suggestionContainer.style.marginLeft = 12;
+                suggestionContainer.style.marginTop = 2;
+
+                var suggestionLabel = new Label($"Suggested: {orphan.SuggestedAssetPath} ({orphan.SuggestedGuid}) — {orphan.SuggestionReason}. Auto-apply failed, retry here:");
+                suggestionLabel.style.fontSize = 11;
+                suggestionLabel.style.color = new Color(0.8f, 1f, 0.8f);
+                suggestionLabel.style.flexGrow = 1f;
+                suggestionLabel.style.whiteSpace = WhiteSpace.Normal;
+                suggestionContainer.Add(suggestionLabel);
+
+                var applyButton = new Button(() => ApplyOrphanFix(orphan, row))
+                {
+                    text = "Retry"
+                };
+                applyButton.style.height = 22;
+                applyButton.style.minWidth = 60;
+                applyButton.style.marginLeft = 8;
+                suggestionContainer.Add(applyButton);
+
+                row.Add(suggestionContainer);
+            }
+            else
+            {
+                var noSuggestion = new Label("No suggestion (manual fix required)");
+                noSuggestion.style.fontSize = 11;
+                noSuggestion.style.marginLeft = 12;
+                noSuggestion.style.color = new Color(0.7f, 0.7f, 0.7f);
+                noSuggestion.style.unityFontStyleAndWeight = FontStyle.Italic;
+                row.Add(noSuggestion);
+            }
+
+            return row;
+        }
+
+        /// <summary>
+        /// Rewrites every reference to the orphan GUID in the row's asset file to the suggested
+        /// GUID, then triggers a Unity import on the touched file. Replaces inside the row's UI
+        /// with a confirmation banner so the user sees the result.
+        /// </summary>
+        private void ApplyOrphanFix(OrphanReference orphan, VisualElement row)
+        {
+            if (orphan == null || string.IsNullOrEmpty(orphan.AssetPath) || string.IsNullOrEmpty(orphan.OrphanGuid) || string.IsNullOrEmpty(orphan.SuggestedGuid))
+            {
+                return;
+            }
+
+            // The orphan's AssetPath is a Unity-style "Assets/..." path. Reconstruct the OS path
+            // so we can write to it directly — File.* APIs don't understand "Assets/" rooting.
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            string osPath = Path.Combine(projectRoot, orphan.AssetPath.Replace('/', Path.DirectorySeparatorChar));
+
+            if (!File.Exists(osPath))
+            {
+                EditorUtility.DisplayDialog("Apply Orphan Fix", $"Could not find file on disk:\n{osPath}", "OK");
+                return;
+            }
+
+            int replacements;
+            try
+            {
+                string content = File.ReadAllText(osPath);
+                // Count BEFORE replacing — old and new GUID are both 32 hex chars, so file length
+                // doesn't change. We need an explicit count to know whether anything happened.
+                replacements = CountOccurrences(content, orphan.OrphanGuid);
+                if (replacements == 0)
+                {
+                    EditorUtility.DisplayDialog("Apply Orphan Fix", "No occurrences of the orphan GUID were found — the file may have changed since the report was generated.", "OK");
+                    return;
+                }
+
+                content = content.Replace(orphan.OrphanGuid, orphan.SuggestedGuid);
+                File.WriteAllText(osPath, content);
+            }
+            catch (Exception ex)
+            {
+                EditorUtility.DisplayDialog("Apply Orphan Fix", $"Failed to rewrite {orphan.AssetPath}:\n{ex.Message}", "OK");
+                return;
+            }
+
+            AssetDatabase.ImportAsset(orphan.AssetPath, ImportAssetOptions.ForceUpdate);
+            Debug.Log($"[GUID Sync] Replaced {replacements} orphan GUID reference(s) in {orphan.AssetPath} → {orphan.SuggestedGuid}");
+
+            // Swap the row content for a "fixed" banner so the user sees the change took effect.
+            row.Clear();
+            var banner = new Label($"✓ {orphan.AssetPath}: rewrote {replacements} reference(s) to {orphan.SuggestedAssetPath}");
+            banner.style.color = new Color(0.6f, 1f, 0.6f);
+            banner.style.unityFontStyleAndWeight = FontStyle.Bold;
+            banner.style.whiteSpace = WhiteSpace.Normal;
+            row.Add(banner);
+        }
+
+        private static int CountOccurrences(string haystack, string needle)
+        {
+            if (string.IsNullOrEmpty(haystack) || string.IsNullOrEmpty(needle)) return 0;
+            int count = 0;
+            int i = 0;
+            while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                i += needle.Length;
+            }
+            return count;
         }
 
         private VisualElement CreateSkippedFilesSection()

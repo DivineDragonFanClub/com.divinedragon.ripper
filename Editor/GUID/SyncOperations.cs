@@ -99,6 +99,38 @@ namespace DivineDragon
         public string RealScriptPath { get; set; }
     }
 
+    /// <summary>
+    /// A GUID reference in a main-project YAML file that resolves to no meta file in either the
+    /// main project or the AssetRipper output. Typical cause: a previous dump session imported an
+    /// asset (e.g. a font) that internally references another asset (e.g. its atlas texture) by
+    /// the AssetRipper-assigned GUID, and a later dump (or manual re-import) changed the target's
+    /// project-side GUID. The synchronizer's normal path-matching pass can't recover from this
+    /// because the orphan GUID exists nowhere — there's nothing to match against.
+    ///
+    /// We surface these so they're visible (Editor.log, sync report) and, where we have a high-
+    /// confidence filename-proximity guess, propose a remap target the user can apply with one click.
+    /// </summary>
+    [Serializable]
+    public class OrphanReferenceOperation
+    {
+        /// <summary>Unity-style path of the file that contains the dead reference.</summary>
+        public string AssetPath { get; set; }
+        /// <summary>The GUID that resolves to nothing in either project.</summary>
+        public string OrphanGuid { get; set; }
+        /// <summary>1-based line in the asset file where the reference appears (first occurrence).</summary>
+        public int LineNumber { get; set; }
+        /// <summary>How many times the orphan GUID is referenced in this file.</summary>
+        public int Occurrences { get; set; }
+        /// <summary>If we found a likely fix by filename proximity, the candidate's Unity path.</summary>
+        public string SuggestedAssetPath { get; set; }
+        /// <summary>If we found a likely fix, the candidate's GUID.</summary>
+        public string SuggestedGuid { get; set; }
+        /// <summary>Why we believe SuggestedGuid is the right target ("name match", etc.). Empty when no suggestion.</summary>
+        public string SuggestionReason { get; set; }
+        /// <summary>Set when the scanner already rewrote the file in place using SuggestedGuid. UI uses this to render an applied/unapplied state.</summary>
+        public bool WasAutoFixed { get; set; }
+    }
+
     [Serializable]
     public class SyncOperations
     {
@@ -108,6 +140,7 @@ namespace DivineDragon
         public List<FileIdRemapOperation> FileIdRemaps { get; } = new List<FileIdRemapOperation>();
         public List<DependencyOperation> Dependencies { get; } = new List<DependencyOperation>();
         public List<ScriptRemapOperation> ScriptRemaps { get; } = new List<ScriptRemapOperation>();
+        public List<OrphanReferenceOperation> OrphanReferences { get; } = new List<OrphanReferenceOperation>();
 
         public SyncTiming Timing { get; } = new SyncTiming();
 
@@ -123,6 +156,7 @@ namespace DivineDragon
         public int GuidRemapCount => GuidRemaps.Count;
         public int ScriptRemapCount => ScriptRemaps.Count;
         public int FileIdRemapCount => FileIdRemaps.Count;
+        public int OrphanReferenceCount => OrphanReferences.Count;
     }
 
 }

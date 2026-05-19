@@ -41,6 +41,14 @@ namespace DivineDragon
             Debug.Log($"[GUID Sync] File copying took: {copyStopwatch.ElapsedMilliseconds}ms ({operations.Copies.Count} files)");
             timing.CopyMs = copyStopwatch.ElapsedMilliseconds;
 
+            // Decode AssetRipper's \uXXXX escapes in double-quoted YAML scalars to raw UTF-8.
+            // Must run before the GUID synchronizer's read/write/regex pass so the in-memory
+            // string and the file on disk stay byte-aligned with what the synchronizer expects.
+            var normalizeStopwatch = Stopwatch.StartNew();
+            int normalizedFiles = NormalizeYamlEscapes(operations.Copies);
+            normalizeStopwatch.Stop();
+            Debug.Log($"[GUID Sync] YAML string normalization took: {normalizeStopwatch.ElapsedMilliseconds}ms ({normalizedFiles} files modified)");
+
             var scriptStopwatch = Stopwatch.StartNew();
             var scriptRemaps = ApplyScriptRemapsInPlace(sourceDir, targetDir, operations.Copies, stubMappings);
             if (scriptRemaps.Count > 0)
@@ -138,6 +146,37 @@ namespace DivineDragon
                 }
                 throw failures.First().ex;
             }
+        }
+
+        private static int NormalizeYamlEscapes(IEnumerable<CopyAssetOperation> copies)
+        {
+            if (copies == null)
+            {
+                return 0;
+            }
+
+            var copyList = copies as IList<CopyAssetOperation> ?? copies.ToList();
+            if (copyList.Count == 0)
+            {
+                return 0;
+            }
+
+            int modifiedCount = 0;
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+
+            Parallel.ForEach(copyList, parallelOptions, copy =>
+            {
+                if (copy.Kind == FileType.Meta) return;
+                if (string.IsNullOrEmpty(copy.TargetPath) || !File.Exists(copy.TargetPath)) return;
+                if (!UnityFileUtils.ShouldScanForReferences(copy.TargetPath)) return;
+
+                if (YamlStringNormalizer.NormalizeFile(copy.TargetPath))
+                {
+                    System.Threading.Interlocked.Increment(ref modifiedCount);
+                }
+            });
+
+            return modifiedCount;
         }
 
         private static List<ScriptRemapOperation> ApplyScriptRemapsInPlace(

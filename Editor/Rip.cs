@@ -137,7 +137,7 @@ namespace DivineDragon
                 Debug.Log($"[GUID Sync] Report generation took: {reportStopwatch.ElapsedMilliseconds}ms");
                 timing.ReportMs = reportStopwatch.ElapsedMilliseconds;
 
-                if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0))
+                if (syncReport != null && (syncReport.Mappings.Count > 0 || syncReport.NewFilesImported.Count > 0 || syncReport.SkippedFiles.Count > 0 || (syncReport.OrphanReferences?.Count ?? 0) > 0))
                 {
                     var syncDevModeEnabled = GUI.Settings.DivineRipperSettingsProvider.IsSyncDevModeEnabled;
                     EditorApplication.delayCall += () => GuidSyncReportWindow.HandleReport(syncReport, ripperOutputPath, syncDevModeEnabled);
@@ -145,11 +145,13 @@ namespace DivineDragon
 
                 var newFileCount = syncReport?.NewFilesImported.Count ?? 0;
                 var skippedCount = syncReport?.SkippedFiles.Count ?? 0;
+                var orphanCount = syncReport?.OrphanReferences?.Count ?? 0;
 
                 totalStopwatch.Stop();
                 Debug.Log($"[GUID Sync] TOTAL sync time: {totalStopwatch.ElapsedMilliseconds}ms ({totalStopwatch.Elapsed.TotalSeconds:F2}s)");
                 timing.TotalMs = totalStopwatch.ElapsedMilliseconds;
-                Debug.Log($"Assets merged into project: {newFileCount} new files imported, {skippedCount} existing files skipped");
+                string orphanSuffix = orphanCount > 0 ? $", {orphanCount} orphan reference(s) detected — open the sync report" : string.Empty;
+                Debug.Log($"Assets merged into project: {newFileCount} new files imported, {skippedCount} existing files skipped{orphanSuffix}");
                 AssetDatabase.Refresh();
                 return true;
             }

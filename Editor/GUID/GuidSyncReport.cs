@@ -55,6 +55,19 @@ namespace DivineDragon
         public Guid RealGuid { get; set; }
     }
 
+    [Serializable]
+    public class OrphanReference
+    {
+        public string AssetPath { get; set; }
+        public Guid OrphanGuid { get; set; }
+        public int LineNumber { get; set; }
+        public int Occurrences { get; set; }
+        public string SuggestedAssetPath { get; set; }
+        public Guid SuggestedGuid { get; set; }
+        public string SuggestionReason { get; set; }
+        public bool WasAutoFixed { get; set; }
+    }
+
     public class GuidSyncReport
     {
         public SyncOperations Operations { get; private set; }
@@ -67,6 +80,7 @@ namespace DivineDragon
         public List<FileIdRemapping> FileIdRemappings { get; private set; }
         public List<ScriptGuidRemapping> ScriptGuidRemappings { get; private set; }
         public Dictionary<FilePath, List<DependencyUpdate>> FileDependencyUpdates { get; private set; }
+        public List<OrphanReference> OrphanReferences { get; private set; }
 
         public string SummaryText { get; private set; }
         public SyncTiming Timing { get; private set; }
@@ -86,9 +100,23 @@ namespace DivineDragon
             public List<AssemblySkipInfoJson> duplicateAssemblies;
             public List<FileIdRemapJson> fileIdRemappings;
             public List<FileDependencyJson> fileDependencies;
+            public List<OrphanReferenceJson> orphanReferences;
             public string summary;
             public string operationsJson;
             public SyncTiming timing;
+        }
+
+        [Serializable]
+        private class OrphanReferenceJson
+        {
+            public string assetPath;
+            public Guid orphanGuid;
+            public int lineNumber;
+            public int occurrences;
+            public string suggestedAssetPath;
+            public Guid suggestedGuid;
+            public string suggestionReason;
+            public bool wasAutoFixed;
         }
 
         [Serializable]
@@ -257,6 +285,23 @@ namespace DivineDragon
                 .ToList() ?? new List<ScriptGuidRemapping>();
 
             report.FileDependencyUpdates = BuildDependencyDictionary(payload);
+
+            report.OrphanReferences = payload.orphanReferences?
+                .Select(o => new OrphanReference
+                {
+                    AssetPath = o?.assetPath,
+                    OrphanGuid = o?.orphanGuid,
+                    LineNumber = o?.lineNumber ?? 0,
+                    Occurrences = o?.occurrences ?? 0,
+                    SuggestedAssetPath = o?.suggestedAssetPath,
+                    SuggestedGuid = o?.suggestedGuid,
+                    SuggestionReason = o?.suggestionReason,
+                    WasAutoFixed = o?.wasAutoFixed ?? false
+                })
+                .Where(o => !string.IsNullOrEmpty(o.AssetPath))
+                .OrderBy(o => o.AssetPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(o => o.LineNumber)
+                .ToList() ?? new List<OrphanReference>();
 
             report.SummaryText = payload.summary ?? string.Empty;
 
@@ -460,6 +505,22 @@ namespace DivineDragon
                     }).OrderBy(d => d.DependencyName, StringComparer.OrdinalIgnoreCase).ToList(),
                     StringComparer.OrdinalIgnoreCase);
 
+            OrphanReferences = Operations.OrphanReferences
+                .Select(op => new OrphanReference
+                {
+                    AssetPath = op.AssetPath,
+                    OrphanGuid = op.OrphanGuid,
+                    LineNumber = op.LineNumber,
+                    Occurrences = op.Occurrences,
+                    SuggestedAssetPath = op.SuggestedAssetPath,
+                    SuggestedGuid = op.SuggestedGuid,
+                    SuggestionReason = op.SuggestionReason,
+                    WasAutoFixed = op.WasAutoFixed
+                })
+                .OrderBy(o => o.AssetPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(o => o.LineNumber)
+                .ToList();
+
             BuildSummary();
         }
 
@@ -473,7 +534,8 @@ namespace DivineDragon
                 $"Duplicate Assemblies Skipped: {DuplicateAssemblies.Count}",
                 $"Script Stub Remappings: {ScriptGuidRemappings.Count}",
                 $"UUID Mappings: {Mappings.Count}",
-                $"FileID Remappings: {FileIdRemappings.Count}"
+                $"FileID Remappings: {FileIdRemappings.Count}",
+                $"Orphan References: {OrphanReferences?.Count ?? 0}"
             };
 
             if (Timing != null)
@@ -525,12 +587,35 @@ namespace DivineDragon
                 duplicateAssemblies = BuildDuplicateAssemblyJson(),
                 fileIdRemappings = BuildFileIdRemapJson(),
                 fileDependencies = BuildFileDependencyJson(),
+                orphanReferences = BuildOrphanReferenceJson(),
                 summary = SummaryText,
                 operationsJson = Operations != null ? JsonUtility.ToJson(Operations) : null,
                 timing = Timing
             };
 
             return JsonUtility.ToJson(payload, true);
+        }
+
+        private List<OrphanReferenceJson> BuildOrphanReferenceJson()
+        {
+            if (OrphanReferences == null || OrphanReferences.Count == 0)
+            {
+                return new List<OrphanReferenceJson>();
+            }
+
+            return OrphanReferences
+                .Select(o => new OrphanReferenceJson
+                {
+                    assetPath = o.AssetPath,
+                    orphanGuid = o.OrphanGuid,
+                    lineNumber = o.LineNumber,
+                    occurrences = o.Occurrences,
+                    suggestedAssetPath = o.SuggestedAssetPath,
+                    suggestedGuid = o.SuggestedGuid,
+                    suggestionReason = o.SuggestionReason,
+                    wasAutoFixed = o.WasAutoFixed
+                })
+                .ToList();
         }
 
         private List<NewFileJson> BuildNewFileJson()
