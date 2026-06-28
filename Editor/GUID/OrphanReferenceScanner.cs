@@ -6,15 +6,18 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEditor;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace DivineDragon
 {
     /// <summary>
-    /// Detects GUID references in main-project YAML that resolve to no <c>.meta</c> file in
-    /// either the main project or the AssetRipper output. These are dead references that the
-    /// normal sync pass cannot fix, because the orphan GUID exists nowhere — there's no path-
-    /// matched mapping to remap against.
+    /// Detects GUID references in main-project YAML that no asset can resolve. A cheap <c>.meta</c>
+    /// prefilter (main project + AssetRipper output) screens out the obvious hits; survivors are
+    /// confirmed against Unity's AssetDatabase, which is authoritative and also sees packages
+    /// (PackageCache, embedded, and file: packages) and built-in resources — none of which have a
+    /// <c>.meta</c> the prefilter could find. A reference is an orphan only if BOTH miss, so package
+    /// and built-in references are no longer false-flagged (and destructively "auto-fixed").
     ///
     /// Where possible, attaches a filename-proximity suggestion (e.g. font asset references an
     /// orphan atlas-texture GUID → search for "&lt;font basename&gt;*Atlas.png" in main).
@@ -47,8 +50,11 @@ namespace DivineDragon
 
             var totalStopwatch = Stopwatch.StartNew();
 
-            // 1. Build the "known GUIDs" set from every .meta file we can see, in both projects.
-            //    A reference is an orphan iff its GUID isn't in this set.
+            // 1. Cheap PREFILTER: every .meta GUID we can see across both Assets trees. A hit means
+            //    "definitely resolvable, skip"; a miss means "candidate — confirm against Unity below".
+            //    The prefilter still earns its keep: assets the subordinate import just copied into the
+            //    main project aren't imported into the AssetDatabase yet (we run inside StartAssetEditing),
+            //    but their .meta files are already on disk, so they won't be mistaken for orphans.
             var knownGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CollectMetaGuids(mainAssetsPath, knownGuids);
             if (!string.IsNullOrEmpty(subordinateAssetsPath) && Directory.Exists(subordinateAssetsPath))
@@ -61,35 +67,75 @@ namespace DivineDragon
             //    how AssetRipper outputs tend to relate (e.g. "SystemBold SDF" → "SystemBold SDF Atlas.png").
             var mainIndex = BuildMainFilenameIndex(mainAssetsPath);
 
-            // 3. Walk every YAML file in main and collect orphan refs. Read in parallel because
-            //    each file is independent; merge results into a single list at the end.
-            var candidates = new List<string>();
+            var files = new List<string>();
             foreach (var filePath in Directory.EnumerateFiles(mainAssetsPath, "*", SearchOption.AllDirectories))
             {
                 if (MetaFileParser.IsMetaFile(filePath)) continue;
                 if (!UnityFileUtils.ShouldScanForReferences(filePath)) continue;
-                candidates.Add(filePath);
+                files.Add(filePath);
             }
 
-            var perFileOrphans = new ConcurrentBag<OrphanReferenceOperation>();
-            // Files we rewrote get re-imported by Unity after StopAssetEditing — but we still log
-            // them explicitly so they're visible in the sync report when re-opened.
             var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
 
-            Parallel.ForEach(candidates, parallelOptions, filePath =>
+            // PHASE 1 — PARALLEL detect + suggest. No writes, no Unity API: ScanFileForOrphans only
+            //    reads files and the prebuilt in-memory FilenameIndex, so it's safe to fan out.
+            var perFileBag = new ConcurrentBag<FileOrphans>();
+            Parallel.ForEach(files, parallelOptions, filePath =>
             {
-                // ScanAndApply does the read, the rewrite (if any orphans have suggestions), and
-                // the write all in one pass — so a file with 3 orphan refs to the same dead atlas
-                // only round-trips through disk once.
-                var ops = ScanAndApply(filePath, mainAssetsPath, knownGuids, mainIndex);
-                foreach (var op in ops)
+                var found = ScanFileForOrphans(filePath, mainAssetsPath, knownGuids, mainIndex);
+                if (found != null) perFileBag.Add(found);
+            });
+            var perFile = perFileBag.ToList(); // ForEach is a barrier — the bag is done being written.
+
+            // PHASE 2 — MAIN-THREAD batch resolve. Check every DISTINCT candidate GUID against Unity
+            //    once. This is the only main-thread-bound step (AssetDatabase is main-thread-only on
+            //    2020.3). GUIDToAssetPath resolves packages (PackageCache + embedded + file:) and
+            //    built-in resources — exactly what the .meta walk structurally can't see. `resolvable`
+            //    is immutable after this loop, so PHASE 3 can read it from worker threads safely.
+            var resolvable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var guid in perFile.SelectMany(f => f.Ops)
+                                        .Select(o => o.OrphanGuid)
+                                        .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrEmpty(AssetDatabase.GUIDToAssetPath(guid)))
                 {
-                    perFileOrphans.Add(op);
+                    resolvable.Add(guid);
                 }
+            }
+
+            // PHASE 3 — PARALLEL patch. Same shape as the original write pass, but gated on the
+            //    read-only `resolvable` set: candidates Unity can resolve are dropped (never reported,
+            //    never rewritten); the rest are real orphans and get their suggested fix applied.
+            int candidateOpCount = perFile.Sum(f => f.Ops.Count);
+            var confirmedBag = new ConcurrentBag<OrphanReferenceOperation>();
+            Parallel.ForEach(perFile, parallelOptions, file =>
+            {
+                var confirmed = file.Ops.Where(op => !resolvable.Contains(op.OrphanGuid)).ToList();
+                if (confirmed.Count == 0) return;
+
+                Dictionary<string, string> substitutions = null;
+                foreach (var op in confirmed)
+                {
+                    if (string.IsNullOrEmpty(op.SuggestedGuid)) continue;
+                    if (string.Equals(op.SuggestedGuid, op.OrphanGuid, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (substitutions == null)
+                        substitutions = new Dictionary<string, string>(StringComparer.Ordinal);
+                    substitutions[op.OrphanGuid] = op.SuggestedGuid;
+                }
+
+                if (substitutions != null && TryApplySubstitutions(file.AbsolutePath, substitutions))
+                {
+                    foreach (var op in confirmed)
+                    {
+                        if (substitutions.ContainsKey(op.OrphanGuid)) op.WasAutoFixed = true;
+                    }
+                }
+
+                foreach (var op in confirmed) confirmedBag.Add(op);
             });
 
-            // 4. Merge + sort for stable reporting (alphabetical by referencing asset, then by line).
-            var ordered = perFileOrphans
+            // Merge + sort for stable reporting (alphabetical by referencing asset, then by line).
+            var ordered = confirmedBag
                 .OrderBy(o => o.AssetPath, StringComparer.Ordinal)
                 .ThenBy(o => o.LineNumber)
                 .ToList();
@@ -98,9 +144,9 @@ namespace DivineDragon
             totalStopwatch.Stop();
 
             int autoFixed = ordered.Count(o => o.WasAutoFixed);
-            int withSuggestion = ordered.Count(o => !string.IsNullOrEmpty(o.SuggestedGuid));
             int unresolved = ordered.Count - autoFixed;
-            Debug.Log($"[GUID Sync] OrphanReferenceScanner: scanned {candidates.Count} files in {totalStopwatch.ElapsedMilliseconds}ms — {ordered.Count} orphan references ({autoFixed} auto-fixed, {unresolved} need manual review, {withSuggestion - autoFixed} suggestions that failed to apply)");
+            int droppedResolvable = candidateOpCount - ordered.Count;
+            Debug.Log($"[GUID Sync] OrphanReferenceScanner: scanned {files.Count} files in {totalStopwatch.ElapsedMilliseconds}ms — {ordered.Count} confirmed orphans ({autoFixed} auto-fixed, {unresolved} need manual review), {droppedResolvable} candidate refs dropped as Unity-resolvable (packages/built-ins)");
 
             // Surface the first few so they're visible without opening the report window.
             int previewCount = Math.Min(5, ordered.Count);
@@ -129,12 +175,13 @@ namespace DivineDragon
         }
 
         /// <summary>
-        /// Read the file once, collect orphan refs, run filename-proximity suggestions, and — if
-        /// any of the orphans landed on a suggestion — rewrite the file in place with all the
-        /// applicable substitutions applied at once. Returning the ops with WasAutoFixed already
-        /// set keeps the caller's bookkeeping trivial.
+        /// Detection only: read the file once and aggregate orphan candidates — GUIDs absent from
+        /// the cheap .meta prefilter — with their field context, attaching a filename-proximity
+        /// suggestion to each. Deliberately does NOT touch the AssetDatabase or write anything: the
+        /// main-thread batch resolve in ScanAndRecord confirms which candidates are real orphans
+        /// before TryApplySubstitutions rewrites them. Returns null when the file has no candidates.
         /// </summary>
-        private static IEnumerable<OrphanReferenceOperation> ScanAndApply(
+        private static FileOrphans ScanFileForOrphans(
             string filePath,
             string mainAssetsPath,
             HashSet<string> knownGuids,
@@ -142,12 +189,12 @@ namespace DivineDragon
         {
             string content;
             try { content = File.ReadAllText(filePath); }
-            catch { return Array.Empty<OrphanReferenceOperation>(); }
+            catch { return null; }
 
             // Fast-reject files that contain no `guid:` substring at all — they can't have orphan refs.
             if (string.IsNullOrEmpty(content) || content.IndexOf("guid:", StringComparison.Ordinal) < 0)
             {
-                return Array.Empty<OrphanReferenceOperation>();
+                return null;
             }
 
             var lines = content.Split('\n');
@@ -188,14 +235,14 @@ namespace DivineDragon
                 }
             }
 
-            if (perGuid.Count == 0) return Array.Empty<OrphanReferenceOperation>();
+            if (perGuid.Count == 0) return null;
 
             var unityPath = ToUnityPath(filePath, mainAssetsPath);
             var refBaseName = Path.GetFileNameWithoutExtension(filePath); // e.g. "SystemBold SDF"
 
-            // Build the ops + collect substitutions in one pass.
+            // Build the candidate ops with suggestions attached. No substitutions or writes here —
+            // PHASE 2's AssetDatabase gate decides which of these are real before PHASE 3 patches.
             var ops = new List<OrphanReferenceOperation>(perGuid.Count);
-            Dictionary<string, string> substitutions = null;
             foreach (var kvp in perGuid)
             {
                 var op = new OrphanReferenceOperation
@@ -207,23 +254,27 @@ namespace DivineDragon
                 };
                 AttachSuggestion(op, filePath, refBaseName, kvp.Value.contextKey, mainIndex);
                 ops.Add(op);
-
-                if (!string.IsNullOrEmpty(op.SuggestedGuid) && !string.Equals(op.SuggestedGuid, op.OrphanGuid, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (substitutions == null)
-                        substitutions = new Dictionary<string, string>(StringComparer.Ordinal);
-                    substitutions[op.OrphanGuid] = op.SuggestedGuid;
-                }
             }
 
-            // No actionable suggestions → return read-only orphan list.
-            if (substitutions == null) return ops;
+            return new FileOrphans { AbsolutePath = filePath, Ops = ops };
+        }
 
-            // Apply all substitutions on the original content. Single linear regex pass so a
-            // freshly-substituted GUID never participates as a match for a later substitution.
-            // We know substitutions is non-empty and each key was already found in this file, so
-            // the rewritten content is guaranteed to differ — no need to compare back.
+        /// <summary>
+        /// Re-read and rewrite a single file, substituting confirmed-orphan GUIDs for their
+        /// suggested replacements. PHASE 1 didn't write, so the on-disk content still matches what
+        /// was scanned. Pure File IO + regex — no Unity API — so this is safe to run from the
+        /// PHASE 3 parallel patch. Returns true iff the file was changed on disk.
+        /// </summary>
+        private static bool TryApplySubstitutions(string filePath, Dictionary<string, string> substitutions)
+        {
+            string content;
+            try { content = File.ReadAllText(filePath); }
+            catch { return false; }
+
+            // Single linear regex pass so a freshly-substituted GUID never participates as a match
+            // for a later substitution.
             string rewritten = ApplySubstitutions(content, substitutions);
+            if (string.Equals(rewritten, content, StringComparison.Ordinal)) return false;
 
             try
             {
@@ -232,18 +283,16 @@ namespace DivineDragon
             catch (Exception ex)
             {
                 Debug.LogWarning($"[GUID Sync] Could not write orphan-fix to {filePath}: {ex.Message}");
-                return ops;
+                return false;
             }
+            return true;
+        }
 
-            // Mark every op whose orphan GUID was in the substitution set as fixed.
-            foreach (var op in ops)
-            {
-                if (substitutions.ContainsKey(op.OrphanGuid))
-                {
-                    op.WasAutoFixed = true;
-                }
-            }
-            return ops;
+        /// <summary>Per-file detection result: absolute path plus its orphan candidate ops.</summary>
+        private sealed class FileOrphans
+        {
+            public string AbsolutePath;
+            public List<OrphanReferenceOperation> Ops;
         }
 
         /// <summary>
