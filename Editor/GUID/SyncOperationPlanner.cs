@@ -47,6 +47,21 @@ namespace DivineDragon
 
             IdentifyAssemblyConflicts(plan, allFiles, existingAssemblyNames, skipFolders, skippedAssemblyInfo);
 
+            // Loose game scripts (the game's predefined Assembly-CSharp, which AssetRipper emits
+            // without an asmdef, so IdentifyAssemblyConflicts misses them) still need deduping
+            // against the whole project, packages included. Resolve each stub to a real MonoScript
+            // anywhere in the project, skip re-importing it, and remap references to the real GUID,
+            // so base types that live in a package (com.divinedragon.gamecode) aren't duplicated here.
+            var looseStubSkips = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mapping in ScriptUtils.CreateStubToRealGuidMappings(sourceDir))
+            {
+                if (IsInSkippedFolder(mapping.StubPath, skipFolders))
+                    continue; // already handled as a whole duplicate assembly
+                plan.StubScriptMappings.Add(mapping);
+                looseStubSkips.Add(mapping.StubPath);
+                looseStubSkips.Add(mapping.StubPath + ".meta");
+            }
+
             var relocationOverrides = BuildPrivateDependencyOverrides(sourceDir, allFiles, skipFolders);
             RegisterRelocatedDirectories(plan, relocationOverrides, targetDir);
 
@@ -57,6 +72,9 @@ namespace DivineDragon
             foreach (var filePath in allFiles)
             {
                 if (skipFolders.Any(skipFolder => AssemblyUtils.IsPathInFolder(filePath, skipFolder)))
+                    continue;
+
+                if (looseStubSkips.Contains(filePath))
                     continue;
 
                 bool isMetaFile = MetaFileParser.IsMetaFile(filePath);
